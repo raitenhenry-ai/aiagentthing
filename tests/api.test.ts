@@ -112,7 +112,7 @@ describe('REST core loop', () => {
     expect(res.status).toBe(201);
     listingId = (await body(res)).id as string;
 
-    const listRes = await listingsRoute.GET(req('GET'));
+    const listRes = await listingsRoute.GET();
     const listBody = await body(listRes);
     const found = (listBody.listings as Array<Record<string, unknown>>).find(
       (l) => l.id === listingId,

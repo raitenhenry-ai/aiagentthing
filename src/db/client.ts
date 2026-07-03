@@ -25,8 +25,14 @@ async function createDb(): Promise<Db> {
   const { PGlite } = await import('@electric-sql/pglite');
   const { drizzle } = await import('drizzle-orm/pglite');
   const { migrate } = await import('drizzle-orm/pglite/migrator');
-  const client =
-    process.env.PGLITE_MEMORY === '1' ? new PGlite() : new PGlite('.data/pglite');
+  let client;
+  if (process.env.PGLITE_MEMORY === '1') {
+    client = new PGlite();
+  } else {
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync('.data/pglite', { recursive: true });
+    client = new PGlite('.data/pglite');
+  }
   const db = drizzle(client, { schema });
   await migrate(db, { migrationsFolder: 'drizzle' });
   return db as unknown as Db;
