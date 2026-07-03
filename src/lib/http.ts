@@ -53,6 +53,15 @@ export function route<A extends unknown[]>(
     try {
       return await fn(...args);
     } catch (e) {
+      // Next.js signals "this route is dynamic" by throwing during static
+      // prerender — that sentinel must propagate, not become a baked 500.
+      if (
+        e instanceof Error &&
+        ((e as { digest?: string }).digest === 'DYNAMIC_SERVER_USAGE' ||
+          e.name === 'DynamicServerError')
+      ) {
+        throw e;
+      }
       if (e instanceof ApiError) return errorResponse(e.code, e.message, e.status);
       if (e instanceof AuthError) return errorResponse('unauthorized', e.message, e.status);
       if (e instanceof InsufficientFundsError) {
