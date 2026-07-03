@@ -21,6 +21,7 @@ export interface ListingView {
   id: string;
   seller_agent_id: string;
   seller_reputation: number;
+  pricing_mode: 'fixed' | 'quote';
   title: string;
   description: string;
   price_credits: bigint;
@@ -57,6 +58,7 @@ export async function searchListings(db: Db, f: SearchFilters = {}): Promise<Lis
         id: listing.id,
         seller_agent_id: listing.sellerAgentId,
         seller_reputation: sellerReputation,
+        pricing_mode: listing.pricingMode,
         title: listing.title,
         description: listing.description,
         price_credits: listing.priceCredits,
@@ -79,22 +81,37 @@ export interface CreateListingArgs {
   sellerAgentId: string;
   title: string;
   description?: string;
+  pricingMode?: 'fixed' | 'quote';
   priceCredits: bigint;
   turnaroundSeconds: number;
   acceptanceCriteria: AcceptanceCriteria;
   status?: 'draft' | 'active';
 }
 
+const MAX_PRICE = 100_000_000n; // $1M cap
+const MAX_TURNAROUND = 30 * 24 * 3600; // 30 days
+
 /** Create a listing and its immutable version-1 snapshot. */
 export async function createListing(db: Db, args: CreateListingArgs): Promise<string> {
   const criteria = acceptanceCriteriaSchema.parse(args.acceptanceCriteria);
+  const pricingMode = args.pricingMode ?? 'fixed';
+  if (pricingMode === 'fixed' && args.priceCredits <= 0n) {
+    throw new ApiError('invalid_price', 'Fixed-price listings need a positive price', 422);
+  }
+  if (args.priceCredits < 0n || args.priceCredits > MAX_PRICE) {
+    throw new ApiError('invalid_price', 'Price out of range', 422);
+  }
+  if (args.turnaroundSeconds > MAX_TURNAROUND) {
+    throw new ApiError('invalid_turnaround', 'Turnaround exceeds 30 days', 422);
+  }
   const id = newId('lst');
   await db.transaction(async (tx) => {
     await tx.insert(listings).values({
       id,
       sellerAgentId: args.sellerAgentId,
-      title: args.title,
+      title: args.title.trim(),
       description: args.description ?? '',
+      pricingMode,
       priceCredits: args.priceCredits,
       turnaroundSeconds: args.turnaroundSeconds,
       acceptanceCriteria: criteria,

@@ -1,11 +1,12 @@
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '@/db/client';
-import { deliveries, listings, listingVersions, orders } from '@/db/schema';
+import { deliveries, ledgerEntries, listings, listingVersions, orders } from '@/db/schema';
 import { inngest, isInngestConfigured } from '@/inngest/client';
 import { ApiError } from './http';
 import { newId } from './ids';
 import { holdEscrow, topUp } from './ledger';
 import { getRail, PaymentError, type PaymentRequirements } from './payments';
+import { settleInboundIdempotent } from './payments/inbound';
 import { transitionOrder } from './state-machine';
 import { runVerification } from './verification/run';
 import { emitWebhookEvent } from './webhooks';
@@ -34,6 +35,7 @@ export async function createOrderQuote(
       status: listings.status,
       version: listings.version,
       title: listings.title,
+      pricingMode: listings.pricingMode,
     })
     .from(listings)
     .where(eq(listings.id, args.listingId));
@@ -44,6 +46,13 @@ export async function createOrderQuote(
   }
   if (listing.sellerAgentId === args.buyerAgentId) {
     throw new ApiError('self_dealing', 'An agent cannot buy its own listing', 409);
+  }
+  if (listing.pricingMode === 'quote') {
+    throw new ApiError(
+      'quote_required',
+      'This listing is quote-priced: request a quote first (POST /api/quotes)',
+      409,
+    );
   }
 
   // The purchase contract is the immutable version snapshot.
@@ -109,9 +118,17 @@ export async function orderRequirements(
   });
 }
 
+const ORDER_QUOTE_TTL_MS =
+  Number.parseInt(process.env.ORDER_QUOTE_TTL_SECONDS ?? '86400', 10) * 1000;
+
 /**
  * Settle the buyer's x402 payment and escrow the order atomically. The payer
  * wallet must be the authenticated buyer's wallet.
+ *
+ * Idempotent per X-PAYMENT header: retries after a dropped response neither
+ * double-charge nor strand funds — the recorded settlement is reused and
+ * finalization resumes. If a second, DIFFERENT payment races in for the same
+ * order, the loser's funds land as withdrawable credits, never vanish.
  */
 export async function payForOrder(
   db: Db,
@@ -130,6 +147,8 @@ export async function payForOrder(
       priceCredits: orders.priceCredits,
       listingId: orders.listingId,
       listingVersion: orders.listingVersion,
+      createdAt: orders.createdAt,
+      deadlineAt: orders.deadlineAt,
     })
     .from(orders)
     .where(eq(orders.id, args.orderId));
@@ -140,11 +159,17 @@ export async function payForOrder(
   if (order.state !== 'created') {
     throw new ApiError('already_paid', `Order is already ${order.state}`, 409);
   }
+  if (Date.now() - order.createdAt.getTime() > ORDER_QUOTE_TTL_MS) {
+    throw new ApiError('quote_expired', 'This order quote expired — create a new order', 409);
+  }
 
   const requirements = await orderRequirements(db, args.orderId);
-  // On-chain settlement happens BEFORE any ledger write; if anything after
-  // this fails the credits are still recorded for the payer on retry paths.
-  const settlement = await getRail().settleInbound(args.paymentHeader, requirements);
+  const settlement = await settleInboundIdempotent(db, {
+    paymentHeader: args.paymentHeader,
+    requirements,
+    agentId: args.buyerAgentId,
+    context: `order:${order.id}`,
+  });
   if (settlement.payer !== args.buyerWallet.toLowerCase()) {
     throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
   }
@@ -161,9 +186,29 @@ export async function payForOrder(
   const turnaround = versionRows[0]?.turnaroundSeconds ?? 3600;
   const deadlineAt = new Date(Date.now() + turnaround * 1000);
 
+  // Phase A: credit the inbound funds exactly once (keyed by tx hash).
   await db.transaction(async (tx) => {
-    // Inbound USDC → buyer credits, tied to the on-chain tx.
-    await topUp(tx, args.buyerAgentId, order.priceCredits, settlement.txHash, order.id);
+    const already = await tx
+      .select({ id: ledgerEntries.id })
+      .from(ledgerEntries)
+      .where(and(eq(ledgerEntries.txHash, settlement.txHash), eq(ledgerEntries.entryType, 'topup')));
+    if (already.length === 0) {
+      await topUp(tx, args.buyerAgentId, order.priceCredits, settlement.txHash, order.id);
+    }
+  });
+
+  // Phase B: escrow + transition under the order row lock. If a concurrent
+  // payment already escrowed the order, this settles as a no-op success and
+  // the surplus credits stay withdrawable on the buyer's balance.
+  const finalDeadline = await db.transaction(async (tx) => {
+    const locked = await tx
+      .select({ state: orders.state, deadlineAt: orders.deadlineAt })
+      .from(orders)
+      .where(eq(orders.id, order.id))
+      .for('update');
+    const current = locked[0];
+    if (!current) throw new ApiError('not_found', 'Order not found', 404);
+    if (current.state !== 'created') return current.deadlineAt;
     const escrowEntryId = await holdEscrow(tx, {
       orderId: order.id,
       buyerAgentId: args.buyerAgentId,
@@ -171,6 +216,7 @@ export async function payForOrder(
     });
     await tx.update(orders).set({ escrowEntryId, deadlineAt }).where(eq(orders.id, order.id));
     await transitionOrder(tx, { orderId: order.id, to: 'escrowed', actor: 'system' });
+    return deadlineAt;
   });
 
   const sellerRows = await db
@@ -183,7 +229,7 @@ export async function payForOrder(
     void inngest
       .send({
         name: 'order/escrowed',
-        data: { orderId: order.id, deadlineAt: deadlineAt.toISOString() },
+        data: { orderId: order.id, deadlineAt: finalDeadline.toISOString() },
       })
       .catch((e) => console.error('inngest send failed:', e));
   }
@@ -192,7 +238,7 @@ export async function payForOrder(
     agentIds: [args.buyerAgentId, ...(sellerAgentId ? [sellerAgentId] : [])],
     payload: { order_id: order.id, state: 'escrowed', tx_hash: settlement.txHash },
   });
-  return { orderId: order.id, state: 'escrowed', deadlineAt, txHash: settlement.txHash };
+  return { orderId: order.id, state: 'escrowed', deadlineAt: finalDeadline, txHash: settlement.txHash };
 }
 
 /**

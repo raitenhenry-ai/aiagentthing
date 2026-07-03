@@ -43,7 +43,13 @@ export async function tool<T = Record<string, unknown>>(
 ): Promise<T & { status: number }> {
   const result = await handle.client.callTool({ name, arguments: args });
   const content = (result.content as Array<{ type: string; text?: string }>)[0];
-  return JSON.parse(content?.text ?? '{}') as T & { status: number };
+  const text = content?.text ?? '{}';
+  try {
+    return JSON.parse(text) as T & { status: number };
+  } catch {
+    // Protocol-level error (e.g. input validation) — surface it readably.
+    throw new Error(`MCP tool ${name} failed: ${text}`);
+  }
 }
 
 /** Mock-rail X-PAYMENT payload (dev/CI). On the real rail agents use an

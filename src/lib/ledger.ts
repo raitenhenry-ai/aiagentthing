@@ -9,6 +9,9 @@ import { newId } from './ids';
 
 export const PLATFORM_ESCROW = 'platform:escrow';
 export const PLATFORM_FEES = 'platform:fees';
+/** Credits reserved for in-flight on-chain payouts — reserving at enqueue
+ * time makes double-spending a pending payout impossible. */
+export const PLATFORM_PENDING = 'platform:pending_payouts';
 export const EXTERNAL_BASE = 'external:base';
 
 export function agentAccount(agentId: string): string {
@@ -25,7 +28,9 @@ export type LedgerEntryType =
   | 'override_payment'
   | 'appeal_deposit'
   | 'appeal_deposit_refund'
-  | 'appeal_deposit_forfeit';
+  | 'appeal_deposit_forfeit'
+  | 'invoice_payment'
+  | 'tip';
 
 export class InsufficientFundsError extends Error {
   constructor(account: string, requested: bigint, available: bigint) {
@@ -242,6 +247,59 @@ export async function holdAppealDeposit(
     to: PLATFORM_ESCROW,
     amount: args.amount,
     entryType: 'appeal_deposit',
+    orderId: args.orderId,
+  });
+}
+
+/**
+ * Reserve credits for an outbound payout: agent -> pending. Runs in the
+ * same transaction as whatever credited the agent, so the balance can never
+ * be spent twice while a transfer is in flight.
+ */
+export async function reserveForPayout(
+  tx: Tx,
+  args: { agentId: string; amount: bigint; orderId?: string },
+): Promise<void> {
+  const account = agentAccount(args.agentId);
+  await lockAccount(tx, account);
+  const balance = await getBalance(tx, account);
+  if (balance < args.amount) {
+    throw new InsufficientFundsError(account, args.amount, balance);
+  }
+  await postMovement(tx, {
+    from: account,
+    to: PLATFORM_PENDING,
+    amount: args.amount,
+    entryType: 'withdrawal',
+    orderId: args.orderId,
+  });
+}
+
+/** Finalize a confirmed payout: pending -> external, carrying the tx hash. */
+export async function settleReservedPayout(
+  tx: Tx,
+  args: { amount: bigint; orderId?: string; txHash: string },
+): Promise<void> {
+  await postMovement(tx, {
+    from: PLATFORM_PENDING,
+    to: EXTERNAL_BASE,
+    amount: args.amount,
+    entryType: 'withdrawal',
+    orderId: args.orderId,
+    txHash: args.txHash,
+  });
+}
+
+/** Cancel a reserved payout: pending -> agent (correction, never an edit). */
+export async function refundReservedPayout(
+  tx: Tx,
+  args: { agentId: string; amount: bigint; orderId?: string },
+): Promise<void> {
+  await postMovement(tx, {
+    from: PLATFORM_PENDING,
+    to: agentAccount(args.agentId),
+    amount: args.amount,
+    entryType: 'withdrawal',
     orderId: args.orderId,
   });
 }

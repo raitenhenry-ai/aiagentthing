@@ -97,9 +97,97 @@ async function main(): Promise<void> {
     ledger_entries: (evidence.ledger_entries ?? []).length,
   });
 
+  // --- reviews, tips, profiles ----------------------------------------------
+  const review = await tool(buyer, 'submit_review', {
+    order_id: quote.order_id,
+    rating: 5,
+    comment: 'Fast, correct CSV. Would buy again.',
+  });
+  log('buyer reviewed the seller', review);
+
+  await fetch(`${BASE}/api/dev/fund`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-app-secret': APP_SECRET },
+    body: JSON.stringify({ wallet_address: buyer.wallet, amount_credits: 50 }),
+  });
+  const tip = await tool(buyer, 'tip_order', {
+    order_id: quote.order_id,
+    amount_credits: 50,
+    payment_payload: mockPaymentPayload(buyer.wallet),
+  });
+  log('buyer tipped the seller', tip);
+
+  await tool(seller, 'update_profile', {
+    name: 'CSVForge',
+    bio: 'Deterministic JSON→CSV conversion with machine-verifiable contracts.',
+    tags: ['csv', 'data'],
+  });
+  const sellerAgentId = (await tool<{ agent_id: string }>(seller, 'get_balance')).agent_id;
+  const profile = await tool<{ reviews: unknown; reputation: { score: number } }>(
+    buyer,
+    'get_agent_profile',
+    { agent_id: sellerAgentId },
+  );
+  log('seller public profile (trust product)', {
+    reputation: profile.reputation,
+    reviews: profile.reviews,
+  });
+
+  // --- RFQ + invoice paths ----------------------------------------------------
+  const rfqListing = await tool<{ id: string }>(seller, 'create_listing', {
+    title: 'Custom data pipeline (quote-priced)',
+    description: 'Bespoke work — request a quote.',
+    pricing_mode: 'quote',
+    price_credits: 0,
+    turnaround_seconds: 3600,
+    acceptance_criteria: SEED_LISTINGS[0].acceptance_criteria,
+  });
+  const rfq = await tool<{ id: string }>(buyer, 'request_quote', {
+    listing_id: rfqListing.id,
+    input_payload: { rows: [{ a: 1 }] },
+    message: 'Price for ~1k rows nightly?',
+  });
+  await tool(seller, 'respond_quote', {
+    quote_id: rfq.id,
+    price_credits: 750,
+    turnaround_seconds: 1800,
+    message: 'Nightly batch rate',
+  });
+  const accepted = await tool<{ order_id: string }>(buyer, 'accept_quote', { quote_id: rfq.id });
+  await fetch(`${BASE}/api/dev/fund`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-app-secret': APP_SECRET },
+    body: JSON.stringify({ wallet_address: buyer.wallet, amount_credits: 750 }),
+  });
+  const rfqPaid = await tool<{ state: string }>(buyer, 'pay_order', {
+    order_id: accepted.order_id,
+    payment_payload: mockPaymentPayload(buyer.wallet),
+  });
+  log('RFQ flow: request → respond → accept → paid at quoted terms', {
+    quote: rfq.id,
+    order: accepted.order_id,
+    state: rfqPaid.state,
+  });
+
+  const invoice = await tool<{ id: string }>(seller, 'create_invoice', {
+    buyer_agent_id: (await tool<{ agent_id: string }>(buyer, 'get_balance')).agent_id,
+    line_items: [{ description: 'schema consulting call', amount_credits: 300 }],
+    memo: 'One-off consulting',
+  });
+  await fetch(`${BASE}/api/dev/fund`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-app-secret': APP_SECRET },
+    body: JSON.stringify({ wallet_address: buyer.wallet, amount_credits: 300 }),
+  });
+  const invoicePaid = await tool<{ status: string; tx_hash: string }>(buyer, 'pay_invoice', {
+    invoice_id: invoice.id,
+    payment_payload: mockPaymentPayload(buyer.wallet),
+  });
+  log('invoice issued and paid (direct billing, instant payout)', invoicePaid);
+
   await Promise.all([seller.close(), buyer.close()]);
   console.log(
-    '\n✅ Core loop complete: 402 → escrow → deliver → verify → settle → on-chain payout.',
+    '\n✅ Full marketplace verified: fixed price, RFQ, invoice, tip, review, profile — all on x402.',
   );
 }
 

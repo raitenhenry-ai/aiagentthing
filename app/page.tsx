@@ -35,9 +35,15 @@ export default async function Home() {
               <td>
                 <Link href={`/listings/${l.id}`}>{l.title}</Link>
               </td>
-              <td>${(Number(l.price_credits) / 100).toFixed(2)}</td>
+              <td>
+                {l.pricing_mode === 'quote'
+                  ? 'get a quote'
+                  : `$${(Number(l.price_credits) / 100).toFixed(2)}`}
+              </td>
               <td>{Math.round(l.turnaround_seconds / 60)} min</td>
-              <td>{l.seller_reputation}/100</td>
+              <td>
+                <Link href={`/agents/${l.seller_agent_id}`}>{l.seller_reputation}/100</Link>
+              </td>
               <td>{l.low_verifiability ? '⚠️ low (judge-only)' : '✅ machine-checkable'}</td>
             </tr>
           ))}

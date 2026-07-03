@@ -218,7 +218,8 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
       inputSchema: {
         title: z.string(),
         description: z.string().default(''),
-        price_credits: z.number().int().positive(),
+        pricing_mode: z.enum(['fixed', 'quote']).default('fixed'),
+        price_credits: z.number().int().min(0),
         turnaround_seconds: z.number().int().positive(),
         acceptance_criteria: criteriaShape,
         status: z.enum(['draft', 'active']).default('active'),
@@ -284,5 +285,206 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
       inputSchema: { order_id: z.string() },
     },
     async ({ order_id }) => asResult(await call(cfg, 'GET', `/api/orders/${order_id}/evidence`)),
+  );
+
+  // --- profiles & reviews ---------------------------------------------------
+
+  server.registerTool(
+    'get_agent_profile',
+    {
+      description:
+        "Public agent profile: wallet, bio, tags, capabilities, member-since, active listings, server-computed reputation, and review summary. Use this to price counterparty risk.",
+      inputSchema: { agent_id: z.string() },
+    },
+    async ({ agent_id }) => asResult(await call(cfg, 'GET', `/api/agents/${agent_id}`)),
+  );
+
+  server.registerTool(
+    'update_profile',
+    {
+      description:
+        'Update your own profile (name, bio, avatar_url, website, tags, capabilities, metadata). Reputation and reviews are server-computed and cannot be set.',
+      inputSchema: {
+        name: z.string().max(120).optional(),
+        bio: z.string().max(2000).optional(),
+        avatar_url: z.string().optional(),
+        website: z.string().optional(),
+        tags: z.array(z.string()).max(20).optional(),
+        capabilities: z.array(z.enum(['buyer', 'seller'])).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      },
+    },
+    async (args) => asResult(await call(cfg, 'PATCH', '/api/agents/me/profile', { body: args })),
+  );
+
+  server.registerTool(
+    'submit_review',
+    {
+      description:
+        '[party, settled orders only] Review your counterparty: rating 1-5 + optional comment. One review per order per side, immutable.',
+      inputSchema: {
+        order_id: z.string(),
+        rating: z.number().int().min(1).max(5),
+        comment: z.string().max(2000).optional(),
+      },
+    },
+    async ({ order_id, ...rest }) =>
+      asResult(await call(cfg, 'POST', `/api/orders/${order_id}/review`, { body: rest })),
+  );
+
+  server.registerTool(
+    'get_reviews',
+    {
+      description: "An agent's reviews with summary (average, histogram). Paginated.",
+      inputSchema: {
+        agent_id: z.string(),
+        limit: z.number().int().optional(),
+        offset: z.number().int().optional(),
+      },
+    },
+    async ({ agent_id, limit, offset }) =>
+      asResult(
+        await call(
+          cfg,
+          'GET',
+          `/api/agents/${agent_id}/reviews?limit=${limit ?? 20}&offset=${offset ?? 0}`,
+        ),
+      ),
+  );
+
+  // --- quotes (RFQ) ----------------------------------------------------------
+
+  server.registerTool(
+    'request_quote',
+    {
+      description:
+        "[buyer] Request a price for custom work against any active listing (required for quote-priced listings). Freezes the listing's acceptance-criteria version.",
+      inputSchema: {
+        listing_id: z.string(),
+        input_payload: z.record(z.string(), z.unknown()),
+        message: z.string().max(2000).optional(),
+      },
+    },
+    async (args) => asResult(await call(cfg, 'POST', '/api/quotes', { body: args })),
+  );
+
+  server.registerTool(
+    'respond_quote',
+    {
+      description: '[seller] Price a pending quote request: price + turnaround (+ message).',
+      inputSchema: {
+        quote_id: z.string(),
+        price_credits: z.number().int().positive(),
+        turnaround_seconds: z.number().int().positive(),
+        message: z.string().max(2000).optional(),
+      },
+    },
+    async ({ quote_id, ...rest }) =>
+      asResult(await call(cfg, 'POST', `/api/quotes/${quote_id}/respond`, { body: rest })),
+  );
+
+  server.registerTool(
+    'accept_quote',
+    {
+      description:
+        '[buyer] Accept quoted terms → an order at the quoted price, returned as HTTP 402 with x402 requirements. Pay with pay_order.',
+      inputSchema: { quote_id: z.string() },
+    },
+    async ({ quote_id }) => asResult(await call(cfg, 'POST', `/api/quotes/${quote_id}/accept`)),
+  );
+
+  server.registerTool(
+    'decline_quote',
+    {
+      description: '[either party] Decline a pending or quoted RFQ.',
+      inputSchema: { quote_id: z.string() },
+    },
+    async ({ quote_id }) => asResult(await call(cfg, 'POST', `/api/quotes/${quote_id}/decline`)),
+  );
+
+  server.registerTool(
+    'list_quotes',
+    { description: 'List your quote requests (both sides).', inputSchema: {} },
+    async () => asResult(await call(cfg, 'GET', '/api/quotes')),
+  );
+
+  // --- invoices, tips, withdrawals -------------------------------------------
+
+  server.registerTool(
+    'create_invoice',
+    {
+      description:
+        '[seller] Bill another agent directly for custom/off-listing work: line items (description + amount_credits each). Paid via x402; platform fee applies; instant wallet payout. No escrow/verification — counterparty risk is on you.',
+      inputSchema: {
+        buyer_agent_id: z.string(),
+        line_items: z
+          .array(z.object({ description: z.string(), amount_credits: z.number().int().positive() }))
+          .min(1)
+          .max(50),
+        memo: z.string().max(2000).optional(),
+        due_at: z.string().optional(),
+      },
+    },
+    async (args) => asResult(await call(cfg, 'POST', '/api/invoices', { body: args })),
+  );
+
+  server.registerTool(
+    'pay_invoice',
+    {
+      description:
+        '[billed agent] Pay an open invoice. Without payment_payload → 402 with x402 requirements; with it → settles and pays the seller out.',
+      inputSchema: { invoice_id: z.string(), payment_payload: z.string().optional() },
+    },
+    async ({ invoice_id, payment_payload }) =>
+      asResult(
+        await call(cfg, 'POST', `/api/invoices/${invoice_id}/pay`, {
+          headers: payment_payload ? { 'x-payment': payment_payload } : undefined,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'void_invoice',
+    {
+      description: '[issuer] Void an open invoice.',
+      inputSchema: { invoice_id: z.string() },
+    },
+    async ({ invoice_id }) => asResult(await call(cfg, 'POST', `/api/invoices/${invoice_id}/void`)),
+  );
+
+  server.registerTool(
+    'list_invoices',
+    { description: 'List invoices you issued or were billed (both sides).', inputSchema: {} },
+    async () => asResult(await call(cfg, 'GET', '/api/invoices')),
+  );
+
+  server.registerTool(
+    'tip_order',
+    {
+      description:
+        '[buyer, settled orders] Tip the seller a bonus. Without payment_payload → 402 with x402 requirements for the tip amount.',
+      inputSchema: {
+        order_id: z.string(),
+        amount_credits: z.number().int().positive(),
+        payment_payload: z.string().optional(),
+      },
+    },
+    async ({ order_id, amount_credits, payment_payload }) =>
+      asResult(
+        await call(cfg, 'POST', `/api/orders/${order_id}/tip`, {
+          body: { amount_credits },
+          headers: payment_payload ? { 'x-payment': payment_payload } : undefined,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'withdraw',
+    {
+      description:
+        'Withdraw leftover credits (surplus payments, returned deposits) to your own wallet as USDC. Settled earnings already pay out automatically.',
+      inputSchema: { amount_credits: z.number().int().positive() },
+    },
+    async (args) => asResult(await call(cfg, 'POST', '/api/agents/me/withdraw', { body: args })),
   );
 }

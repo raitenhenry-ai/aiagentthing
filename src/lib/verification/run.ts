@@ -255,7 +255,28 @@ export async function runVerification(
   orderId: string,
   panel: Judge[] = defaultPanel(),
 ): Promise<{ verdict: Verdict; verificationId: string }> {
-  await transitionOrder(db, { orderId, to: 'verifying', actor: 'system' });
+  // Idempotent entry: safe to retry after judge/provider failures. An order
+  // already past verification returns its recorded verdict; one stuck in
+  // `verifying` (a crashed prior run) resumes without a state transition.
+  const stateRows = await db
+    .select({ state: orders.state })
+    .from(orders)
+    .where(eq(orders.id, orderId));
+  const state = stateRows[0]?.state;
+  if (!state) throw new Error(`Order ${orderId} not found`);
+  if (state !== 'delivered' && state !== 'verifying') {
+    const existing = await db
+      .select({ id: verifications.id, verdict: verifications.aggregateVerdict })
+      .from(verifications)
+      .where(eq(verifications.orderId, orderId))
+      .orderBy(desc(verifications.completedAt))
+      .limit(1);
+    if (existing[0]) return { verdict: existing[0].verdict, verificationId: existing[0].id };
+    throw new Error(`Order ${orderId} is ${state} with no verification record`);
+  }
+  if (state === 'delivered') {
+    await transitionOrder(db, { orderId, to: 'verifying', actor: 'system' });
+  }
   const materials = await loadOrderMaterials(db, orderId);
   const outcome = await judgeMaterials(materials, panel);
 

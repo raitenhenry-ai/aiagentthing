@@ -104,7 +104,7 @@ describe('x402 payment flow (spec E2E)', () => {
         buyerWallet: buyer.wallet,
         paymentHeader: header,
       }),
-    ).rejects.toThrow(/already settled/);
+    ).rejects.toThrow(/already used|already settled/);
   });
 
   it('a payment from a different wallet than the authenticated buyer is rejected', async () => {
@@ -144,12 +144,18 @@ describe('payout ↔ ledger invariants (spec)', () => {
     const releaseCredit = entries.find(
       (e) => e.entryType === 'escrow_release' && e.amount > 0n,
     )!;
-    const withdrawalDebit = entries.find(
-      (e) => e.entryType === 'withdrawal' && e.amount < 0n,
+    // Reserve leg (agent -> pending, at settlement) and transfer leg
+    // (pending -> external, tx-hashed at confirmation).
+    const reserveDebit = entries.find(
+      (e) => e.entryType === 'withdrawal' && e.amount < 0n && e.txHash === null,
+    )!;
+    const transferDebit = entries.find(
+      (e) => e.entryType === 'withdrawal' && e.amount < 0n && e.txHash !== null,
     )!;
     expect(payoutRows[0]!.amountCredits).toBe(releaseCredit.amount);
-    expect(-withdrawalDebit.amount).toBe(payoutRows[0]!.amountCredits);
-    expect(withdrawalDebit.txHash).toBe(payoutRows[0]!.txHash);
+    expect(-reserveDebit.amount).toBe(payoutRows[0]!.amountCredits);
+    expect(-transferDebit.amount).toBe(payoutRows[0]!.amountCredits);
+    expect(transferDebit.txHash).toBe(payoutRows[0]!.txHash);
     expect(await ledgerSum(db)).toBe(0n);
   });
 

@@ -88,6 +88,37 @@ const spec = {
       get: { summary: 'List my webhooks', security: bearer, responses: { '200': { description: 'webhooks' } } },
     },
     '/api/mcp': { post: { summary: 'MCP streamable-HTTP endpoint exposing all operations as tools', security: bearer, responses: { '200': { description: 'MCP' } } } },
+    '/api/agents/{id}': {
+      get: { summary: 'Public agent profile: identity + reputation + review summary + settled stats', responses: { '200': { description: 'profile' } } },
+    },
+    '/api/agents/me/profile': {
+      get: { summary: 'My profile', security: bearer, responses: { '200': { description: 'profile' } } },
+      patch: { summary: 'Update self-described profile fields (name, bio, tags, links, metadata)', security: bearer, responses: { '200': { description: 'updated profile' } } },
+    },
+    '/api/agents/{id}/reviews': {
+      get: { summary: 'Reviews for an agent, with summary + histogram (paginated)', responses: { '200': { description: 'reviews' } } },
+    },
+    '/api/orders/{id}/review': {
+      post: { summary: 'Review your counterparty on a settled order (1-5 + comment; one per side, immutable)', security: bearer, responses: { '201': { description: 'review' } } },
+    },
+    '/api/orders/{id}/tip': {
+      post: { summary: 'Tip the seller of a settled order via x402 (amount_credits in body)', security: bearer, responses: { '201': { description: 'tipped' }, '402': p402 } },
+    },
+    '/api/quotes': {
+      post: { summary: 'Request a quote (RFQ) against a listing; freezes the criteria version', security: bearer, responses: { '201': { description: 'quote pending' } } },
+      get: { summary: 'List my quotes (both sides)', security: bearer, responses: { '200': { description: 'quotes' } } },
+    },
+    '/api/quotes/{id}': { get: { summary: 'Quote detail (parties only)', security: bearer, responses: { '200': { description: 'quote' } } } },
+    '/api/quotes/{id}/respond': { post: { summary: 'Seller prices a pending quote (price + turnaround)', security: bearer, responses: { '200': { description: 'quoted' } } } },
+    '/api/quotes/{id}/accept': { post: { summary: 'Buyer accepts the quoted terms → order + 402 payment requirements', security: bearer, responses: { '402': p402 } } },
+    '/api/quotes/{id}/decline': { post: { summary: 'Either party declines the RFQ', security: bearer, responses: { '200': { description: 'declined' } } } },
+    '/api/invoices': {
+      post: { summary: 'Issue a direct invoice to another agent (line items; fee applies; no escrow)', security: bearer, responses: { '201': { description: 'open invoice' } } },
+      get: { summary: 'List my invoices (both sides)', security: bearer, responses: { '200': { description: 'invoices' } } },
+    },
+    '/api/invoices/{id}/pay': { post: { summary: 'Pay an open invoice via x402 (X-PAYMENT header); instant seller payout', security: bearer, responses: { '201': { description: 'paid, tx_hash' }, '402': p402 } } },
+    '/api/invoices/{id}/void': { post: { summary: 'Issuer voids an open invoice', security: bearer, responses: { '200': { description: 'void' } } } },
+    '/api/agents/me/withdraw': { post: { summary: 'Withdraw leftover credits to your own wallet as USDC', security: bearer, responses: { '201': { description: 'payout enqueued/confirmed' } } } },
   },
 };
 

@@ -23,7 +23,7 @@ describe('webhooks', () => {
       received.push({
         url: String(url),
         body: String(init?.body),
-        signature: (init?.headers as Record<string, string>)['x-clearing-signature'],
+        signature: (init?.headers as Record<string, string>)['x-clearing-signature'] ?? '',
       });
       return new Response('ok', { status: 200 });
     }) as typeof fetch;

@@ -21,7 +21,11 @@ export type IdPrefix =
   | 'dsp'
   | 'led'
   | 'rep'
-  | 'whk';
+  | 'whk'
+  | 'qot'
+  | 'inv'
+  | 'pay'
+  | 'rev';
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${randomToken(22)}`;

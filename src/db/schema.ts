@@ -18,6 +18,23 @@ import {
 
 export const agentStatusEnum = pgEnum('agent_status', ['active', 'frozen']);
 
+export const pricingModeEnum = pgEnum('pricing_mode', ['fixed', 'quote']);
+
+export const quoteStatusEnum = pgEnum('quote_status', [
+  'pending',
+  'quoted',
+  'accepted',
+  'declined',
+  'expired',
+]);
+
+export const invoiceStatusEnum = pgEnum('invoice_status', ['open', 'paid', 'void']);
+
+export const reviewRoleEnum = pgEnum('review_role', [
+  'buyer_on_seller',
+  'seller_on_buyer',
+]);
+
 export const listingStatusEnum = pgEnum('listing_status', [
   'draft',
   'active',
@@ -60,6 +77,8 @@ export const ledgerEntryTypeEnum = pgEnum('ledger_entry_type', [
   'appeal_deposit',
   'appeal_deposit_refund',
   'appeal_deposit_forfeit',
+  'invoice_payment',
+  'tip',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -74,6 +93,11 @@ export const agents = pgTable(
     id: text('id').primaryKey(),
     walletAddress: text('wallet_address').notNull(),
     name: text('name').notNull().default(''),
+    bio: text('bio').notNull().default(''),
+    avatarUrl: text('avatar_url'),
+    website: text('website'),
+    tags: jsonb('tags').$type<string[]>().notNull().default([]),
+    metadata: jsonb('metadata').notNull().default({}),
     capabilities: jsonb('capabilities').$type<string[]>().notNull().default([]),
     status: agentStatusEnum('status').notNull().default('active'),
     reputationScore: integer('reputation_score').notNull().default(50),
@@ -117,6 +141,7 @@ export const listings = pgTable(
       .references(() => agents.id),
     title: text('title').notNull(),
     description: text('description').notNull().default(''),
+    pricingMode: pricingModeEnum('pricing_mode').notNull().default('fixed'),
     priceCredits: bigint('price_credits', { mode: 'bigint' }).notNull(),
     turnaroundSeconds: integer('turnaround_seconds').notNull(),
     acceptanceCriteria: jsonb('acceptance_criteria').notNull(),
@@ -165,6 +190,7 @@ export const orders = pgTable(
     state: orderStateEnum('state').notNull().default('created'),
     priceCredits: bigint('price_credits', { mode: 'bigint' }).notNull(),
     escrowEntryId: text('escrow_entry_id'),
+    quoteId: text('quote_id'),
     inputPayload: jsonb('input_payload').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     deadlineAt: timestamp('deadline_at', { withTimezone: true }).notNull(),
@@ -288,6 +314,94 @@ export const webhooks = pgTable(
   }),
 );
 
+// Peer reviews: subjective counterpart to the objective reputation engine.
+// One review per settled order per side; immutable once posted.
+export const reviews = pgTable(
+  'reviews',
+  {
+    id: text('id').primaryKey(),
+    orderId: text('order_id')
+      .notNull()
+      .references(() => orders.id),
+    reviewerAgentId: text('reviewer_agent_id')
+      .notNull()
+      .references(() => agents.id),
+    subjectAgentId: text('subject_agent_id')
+      .notNull()
+      .references(() => agents.id),
+    role: reviewRoleEnum('role').notNull(),
+    rating: integer('rating').notNull(), // 1-5, checked in migration
+    comment: text('comment').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    oneReviewPerSide: uniqueIndex('reviews_order_reviewer_idx').on(t.orderId, t.reviewerAgentId),
+    subjectIdx: index('reviews_subject_idx').on(t.subjectAgentId),
+  }),
+);
+
+// RFQ flow for quote-priced listings: buyer requests, seller prices,
+// buyer accepts -> order at the quoted terms (criteria frozen at request).
+export const quotes = pgTable(
+  'quotes',
+  {
+    id: text('id').primaryKey(),
+    listingId: text('listing_id')
+      .notNull()
+      .references(() => listings.id),
+    listingVersion: integer('listing_version').notNull(),
+    buyerAgentId: text('buyer_agent_id')
+      .notNull()
+      .references(() => agents.id),
+    sellerAgentId: text('seller_agent_id')
+      .notNull()
+      .references(() => agents.id),
+    inputPayload: jsonb('input_payload').notNull(),
+    message: text('message').notNull().default(''),
+    status: quoteStatusEnum('status').notNull().default('pending'),
+    quotedPriceCredits: bigint('quoted_price_credits', { mode: 'bigint' }),
+    quotedTurnaroundSeconds: integer('quoted_turnaround_seconds'),
+    sellerMessage: text('seller_message'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    orderId: text('order_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    respondedAt: timestamp('responded_at', { withTimezone: true }),
+  },
+  (t) => ({
+    buyerIdx: index('quotes_buyer_idx').on(t.buyerAgentId),
+    sellerIdx: index('quotes_seller_idx').on(t.sellerAgentId),
+    statusIdx: index('quotes_status_idx').on(t.status),
+  }),
+);
+
+// Direct invoicing between agents (custom/off-listing work): x402-paid,
+// platform fee applied, no escrow/verification — trust is priced via
+// reputation and reviews.
+export const invoices = pgTable(
+  'invoices',
+  {
+    id: text('id').primaryKey(),
+    sellerAgentId: text('seller_agent_id')
+      .notNull()
+      .references(() => agents.id),
+    buyerAgentId: text('buyer_agent_id')
+      .notNull()
+      .references(() => agents.id),
+    lineItems: jsonb('line_items').notNull(),
+    amountCredits: bigint('amount_credits', { mode: 'bigint' }).notNull(),
+    memo: text('memo').notNull().default(''),
+    status: invoiceStatusEnum('status').notNull().default('open'),
+    dueAt: timestamp('due_at', { withTimezone: true }),
+    txHash: text('tx_hash'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    paidAt: timestamp('paid_at', { withTimezone: true }),
+  },
+  (t) => ({
+    sellerIdx: index('invoices_seller_idx').on(t.sellerAgentId),
+    buyerIdx: index('invoices_buyer_idx').on(t.buyerAgentId),
+  }),
+);
+
 export const payoutStatusEnum = pgEnum('payout_status', [
   'pending',
   'confirmed',
@@ -301,9 +415,7 @@ export const payouts = pgTable(
   'payouts',
   {
     id: text('id').primaryKey(),
-    orderId: text('order_id')
-      .notNull()
-      .references(() => orders.id),
+    orderId: text('order_id').references(() => orders.id),
     agentId: text('agent_id')
       .notNull()
       .references(() => agents.id),

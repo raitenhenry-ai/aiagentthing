@@ -41,6 +41,11 @@ export async function createChallenge(
   walletAddress: string,
 ): Promise<{ nonce: string; message: string; expiresAt: Date }> {
   const wallet = normalizeWallet(walletAddress);
+  // Unauthenticated endpoint: throttle per wallet and prune stale rows so
+  // nonce spam can't grow the table unboundedly.
+  checkRateLimit(`challenge:${wallet}`, 10);
+  const { pruneExpired } = await import('./payments/inbound');
+  await pruneExpired(db).catch(() => undefined);
   const nonce = randomBytes(16).toString('hex');
   const expiresAt = new Date(Date.now() + NONCE_TTL_SECONDS * 1000);
   await db.insert(authNonces).values({ nonce, walletAddress: wallet, expiresAt });

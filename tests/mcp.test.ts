@@ -25,6 +25,21 @@ const SPEC_TOOLS = [
   'get_reputation',
   'register_webhook',
   'get_evidence_pack',
+  'get_agent_profile',
+  'update_profile',
+  'submit_review',
+  'get_reviews',
+  'request_quote',
+  'respond_quote',
+  'accept_quote',
+  'decline_quote',
+  'list_quotes',
+  'create_invoice',
+  'pay_invoice',
+  'void_invoice',
+  'list_invoices',
+  'tip_order',
+  'withdraw',
 ];
 
 describe('MCP server', () => {

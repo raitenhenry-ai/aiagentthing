@@ -2,19 +2,30 @@ import { eq } from 'drizzle-orm';
 import type { Db, Tx } from '@/db/client';
 import { payouts } from '@/db/schema';
 import { newId } from '../ids';
-import { agentAccount, EXTERNAL_BASE, postMovement } from '../ledger';
+import { refundReservedPayout, reserveForPayout, settleReservedPayout } from '../ledger';
 import { getRail, type PaymentRail } from './index';
 
-// Settlement writes ledger entries and ENQUEUES a payout; the on-chain
-// transfer executes separately. A failed payout never re-runs settlement
-// logic — only the transfer retries, idempotent per payout id.
+// Settlement (or a withdrawal request) RESERVES the credits and enqueues a
+// payout in one transaction; the on-chain transfer executes separately with
+// idempotency + retries. A failed transfer never re-runs settlement logic,
+// and reserved credits can never be double-spent while a transfer is in
+// flight.
 
-export type PayoutReason = 'release' | 'refund' | 'override' | 'deposit_refund';
+export type PayoutReason =
+  | 'release'
+  | 'refund'
+  | 'override'
+  | 'deposit_refund'
+  | 'withdrawal'
+  | 'invoice'
+  | 'tip';
 
+/** Reserve credits and enqueue the transfer. Call inside the transaction
+ * that credited the agent. */
 export async function enqueuePayout(
   tx: Tx,
   args: {
-    orderId: string;
+    orderId?: string;
     agentId: string;
     toWallet: string;
     amountCredits: bigint;
@@ -22,7 +33,12 @@ export async function enqueuePayout(
   },
 ): Promise<string> {
   if (args.amountCredits <= 0n) throw new Error('Payout amount must be positive');
-  const id = newId('led').replace('led_', 'pay_');
+  await reserveForPayout(tx, {
+    agentId: args.agentId,
+    amount: args.amountCredits,
+    orderId: args.orderId,
+  });
+  const id = newId('pay');
   await tx.insert(payouts).values({
     id,
     orderId: args.orderId,
@@ -36,9 +52,9 @@ export async function enqueuePayout(
 
 /**
  * Execute one pending payout: on-chain USDC transfer (idempotent by payout
- * id), then the matching `withdrawal` ledger pair with the tx hash. On
- * failure the payout stays pending with the error recorded — order state is
- * never touched.
+ * id), then the reserved credits settle to `external:base` with the tx hash.
+ * On failure the payout stays pending with the error recorded — order state
+ * and ledger are never touched.
  */
 export async function executePayout(
   db: Db,
@@ -51,6 +67,7 @@ export async function executePayout(
   if (payout.status === 'confirmed') {
     return { status: 'confirmed', txHash: payout.txHash ?? undefined };
   }
+  if (payout.status === 'failed') return { status: 'pending' }; // cancelled
 
   try {
     const { txHash } = await rail.payout({
@@ -64,7 +81,7 @@ export async function executePayout(
         .from(payouts)
         .where(eq(payouts.id, payout.id))
         .for('update');
-      if (locked[0]?.status === 'confirmed') return; // concurrent executor won
+      if (locked[0]?.status !== 'pending') return; // concurrent executor won
       await tx
         .update(payouts)
         .set({
@@ -74,13 +91,9 @@ export async function executePayout(
           attempts: payout.attempts + 1,
         })
         .where(eq(payouts.id, payout.id));
-      // Credits leave the agent's account as USDC leaves the platform wallet.
-      await postMovement(tx, {
-        from: agentAccount(payout.agentId),
-        to: EXTERNAL_BASE,
+      await settleReservedPayout(tx, {
         amount: payout.amountCredits,
-        entryType: 'withdrawal',
-        orderId: payout.orderId,
+        orderId: payout.orderId ?? undefined,
         txHash,
       });
     });
@@ -92,6 +105,22 @@ export async function executePayout(
       .where(eq(payouts.id, payout.id));
     return { status: 'pending' };
   }
+}
+
+/** Admin: cancel a stuck pending payout, returning the reserve to the agent. */
+export async function cancelPayout(db: Db, payoutId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const rows = await tx.select().from(payouts).where(eq(payouts.id, payoutId)).for('update');
+    const payout = rows[0];
+    if (!payout) throw new Error(`Payout ${payoutId} not found`);
+    if (payout.status !== 'pending') throw new Error(`Payout ${payoutId} is ${payout.status}`);
+    await tx.update(payouts).set({ status: 'failed' }).where(eq(payouts.id, payoutId));
+    await refundReservedPayout(tx, {
+      agentId: payout.agentId,
+      amount: payout.amountCredits,
+      orderId: payout.orderId ?? undefined,
+    });
+  });
 }
 
 /** Run every pending payout for an order (post-settlement, and on retries). */

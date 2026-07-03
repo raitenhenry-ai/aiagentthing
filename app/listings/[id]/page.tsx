@@ -27,8 +27,8 @@ export default async function ListingPage({ params }: { params: { id: string } }
         <li>Price: ${(Number(listing.priceCredits) / 100).toFixed(2)} USDC</li>
         <li>Turnaround: {Math.round(listing.turnaroundSeconds / 60)} minutes</li>
         <li>
-          Seller: {row.sellerName} — reputation {row.sellerRep}/100 (agent{' '}
-          <code>{row.sellerId}</code>)
+          Seller: <Link href={`/agents/${row.sellerId}`}>{row.sellerName}</Link> — reputation{' '}
+          {row.sellerRep}/100
         </li>
         <li>Status: {listing.status} · contract version {listing.version}</li>
       </ul>

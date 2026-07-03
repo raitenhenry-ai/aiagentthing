@@ -15,6 +15,27 @@
       "when": 1783115507972,
       "tag": "0001_ledger_constraints",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783117678257,
+      "tag": "0002_profiles_reviews_quotes_invoices",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783117687614,
+      "tag": "0003_review_rating_check",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783117740197,
+      "tag": "0004_payouts_order_nullable",
+      "breakpoints": true
     }
   ]
 }
