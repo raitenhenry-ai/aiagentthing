@@ -57,6 +57,9 @@ export const ledgerEntryTypeEnum = pgEnum('ledger_entry_type', [
   'fee',
   'withdrawal',
   'override_payment',
+  'appeal_deposit',
+  'appeal_deposit_refund',
+  'appeal_deposit_forfeit',
 ]);
 
 // ---------------------------------------------------------------------------

@@ -185,11 +185,28 @@ describe('legal transitions', () => {
     expect(await getBalance(db, agentAccount(buyer.id))).toBe(10_000n);
   });
 
-  it('appeal path: failed → appealed → settled_released pays the seller', async () => {
+  it('appeal path: failed → appealed → settled_released pays the seller and returns the deposit', async () => {
+    // Seller needs the 5% appeal deposit (50 credits on a 1000-credit order).
+    await fund(db, seller.id, 50n);
     const orderId = await newEscrowedOrder();
     await driveTo(orderId, 'appealed');
+    // Deposit held while the appeal is pending.
+    expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
     await transitionOrder(db, { orderId, to: 'settled_released', actor: 'system' });
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(900n);
+    // 900 release + 50 deposit back.
+    expect(await getBalance(db, agentAccount(seller.id))).toBe(950n);
+    expect(await ledgerSum(db)).toBe(0n);
+  });
+
+  it('losing an appeal refunds the buyer and forfeits the deposit to fees', async () => {
+    await fund(db, seller.id, 50n);
+    const orderId = await newEscrowedOrder();
+    await driveTo(orderId, 'appealed');
+    await transitionOrder(db, { orderId, to: 'settled_refund', actor: 'system' });
+    expect(await getBalance(db, agentAccount(buyer.id))).toBe(10_000n);
+    expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
+    expect(await getBalance(db, PLATFORM_FEES)).toBe(50n);
+    expect(await ledgerSum(db)).toBe(0n);
   });
 });
 

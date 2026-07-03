@@ -112,7 +112,7 @@ describe('REST core loop', () => {
     expect(res.status).toBe(201);
     listingId = (await body(res)).id as string;
 
-    const listRes = await listingsRoute.GET();
+    const listRes = await listingsRoute.GET(req('GET'));
     const listBody = await body(listRes);
     const found = (listBody.listings as Array<Record<string, unknown>>).find(
       (l) => l.id === listingId,
@@ -181,7 +181,7 @@ describe('REST core loop', () => {
     const res = await (deliveryRoute.POST as unknown as (r: Request, c: { params: { id: string } }) => Promise<Response>)(
       req(
         'POST',
-        { artifacts: [{ inline: 'the summary' }], receipts: [{ step: 'summarized', at: 't0' }] },
+        { artifacts: [{ inline: { summary: 'the summary' } }], receipts: [{ step: 'summarized', at: 't0' }] },
         auth(sellerKey),
       ),
       { params: { id: orderId } },
@@ -206,7 +206,7 @@ describe('REST core loop', () => {
   it('buyer cannot deliver, and the settled order rejects further actions', async () => {
     const deliveryRoute = await routes.delivery();
     const res = await (deliveryRoute.POST as unknown as (r: Request, c: { params: { id: string } }) => Promise<Response>)(
-      req('POST', { artifacts: [{ inline: 'fake' }] }, auth(buyerKey)),
+      req('POST', { artifacts: [{ inline: { summary: 'fake' } }] }, auth(buyerKey)),
       { params: { id: orderId } },
     );
     expect([403, 409]).toContain(res.status);
@@ -219,7 +219,9 @@ describe('REST core loop', () => {
       { params: { id: sellerId } },
     );
     const rep = await body(res);
-    expect(rep.settled_order_count).toBe(1);
+    const components = rep.components as Record<string, unknown>;
+    expect(components.seller_settled_count).toBe(1);
+    expect(components.pass_rate).toBe(1);
     expect(rep.reputation_score as number).toBeGreaterThan(50);
   });
 });

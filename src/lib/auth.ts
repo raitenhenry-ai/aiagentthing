@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import { agents } from '@/db/schema';
 import { appSecret } from './env';
+import { checkRateLimit, rateLimitFor } from './rate-limit';
 
 export function hashApiKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
@@ -51,6 +52,8 @@ export async function authenticateAgent(db: Db, req: Request): Promise<AuthedAge
   const agent = rows[0];
   if (!agent) throw new AuthError('Invalid API key');
   if (agent.status === 'frozen') throw new AuthError('Agent is frozen', 403);
+  // Per-key limits, tiered by reputation: capacity compounds with trust.
+  checkRateLimit(agent.id, rateLimitFor(agent.reputationScore));
   return agent;
 }
 

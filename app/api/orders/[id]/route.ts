@@ -4,6 +4,7 @@ import { listings, orders, verifications } from '@/db/schema';
 import { authenticateAgent } from '@/lib/auth';
 import { ApiError, json, route } from '@/lib/http';
 import type { CriterionResult, JudgeVerdict } from '@/lib/verification/judge';
+import type { VerificationRecord } from '@/lib/verification/run';
 
 export const GET = route(async (req: Request, ctx: { params: { id: string } }) => {
   const db = await getDb();
@@ -41,8 +42,8 @@ export const GET = route(async (req: Request, ctx: { params: { id: string } }) =
         confidence: verification.aggregateConfidence,
         tier: verification.tier,
         completed_at: verification.completedAt.toISOString(),
-        criteria_results: summarizeCriteria(
-          verification.judgeVerdicts as unknown as JudgeVerdict[],
+        criteria_results: summarizeRecord(
+          verification.judgeVerdicts as unknown as VerificationRecord,
         ),
       }
     : null;
@@ -64,6 +65,18 @@ export const GET = route(async (req: Request, ctx: { params: { id: string } }) =
     verification: verificationView,
   });
 });
+
+// Parties see per-criterion outcomes only — never judge reasoning (stored
+// hashed) and never individual judge identities/verdicts.
+function summarizeRecord(record: VerificationRecord): CriterionResult[] {
+  const machine: CriterionResult[] = (record.machine_results ?? []).map((r) => ({
+    criterionId: r.criterionId,
+    verdict: r.verdict,
+    confidence: r.confidence,
+  }));
+  const lastRun = record.runs?.[record.runs.length - 1] ?? [];
+  return [...machine, ...summarizeCriteria(lastRun)];
+}
 
 function summarizeCriteria(verdicts: JudgeVerdict[]): CriterionResult[] {
   const byId = new Map<string, { pass: number; total: number; confidence: number }>();

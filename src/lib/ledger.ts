@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db, Tx } from '@/db/client';
 import { ledgerEntries } from '@/db/schema';
 import { newId } from './ids';
@@ -22,7 +22,10 @@ export type LedgerEntryType =
   | 'escrow_refund'
   | 'fee'
   | 'withdrawal'
-  | 'override_payment';
+  | 'override_payment'
+  | 'appeal_deposit'
+  | 'appeal_deposit_refund'
+  | 'appeal_deposit_forfeit';
 
 export class InsufficientFundsError extends Error {
   constructor(account: string, requested: bigint, available: bigint) {
@@ -156,6 +159,21 @@ export async function holdEscrow(
   });
 }
 
+const PRINCIPAL_TYPES = [
+  'escrow_hold',
+  'escrow_release',
+  'escrow_refund',
+  'override_payment',
+  'fee',
+] as const;
+
+const DEPOSIT_TYPES = [
+  'appeal_deposit',
+  'appeal_deposit_refund',
+  'appeal_deposit_forfeit',
+] as const;
+
+/** Order principal currently held in escrow (appeal deposits tracked apart). */
 async function heldAmount(tx: Tx, orderId: string): Promise<bigint> {
   const rows = await tx
     .select({
@@ -166,9 +184,68 @@ async function heldAmount(tx: Tx, orderId: string): Promise<bigint> {
       and(
         eq(ledgerEntries.orderId, orderId),
         eq(ledgerEntries.ledgerAccount, PLATFORM_ESCROW),
+        inArray(ledgerEntries.entryType, [...PRINCIPAL_TYPES]),
       ),
     );
   return BigInt(rows[0]?.held ?? '0');
+}
+
+/** Appeal deposit currently held in escrow for this order. */
+export async function depositHeld(tx: Tx, orderId: string): Promise<bigint> {
+  const rows = await tx
+    .select({
+      held: sql<string>`COALESCE(SUM(${ledgerEntries.amount}), 0)`,
+    })
+    .from(ledgerEntries)
+    .where(
+      and(
+        eq(ledgerEntries.orderId, orderId),
+        eq(ledgerEntries.ledgerAccount, PLATFORM_ESCROW),
+        inArray(ledgerEntries.entryType, [...DEPOSIT_TYPES]),
+      ),
+    );
+  return BigInt(rows[0]?.held ?? '0');
+}
+
+/**
+ * Hold the seller's appeal deposit (5% of order value; refunded if the
+ * appeal succeeds, forfeited to platform fees if it fails).
+ */
+export async function holdAppealDeposit(
+  tx: Tx,
+  args: { orderId: string; sellerAgentId: string; amount: bigint },
+): Promise<void> {
+  if (args.amount <= 0n) return;
+  const seller = agentAccount(args.sellerAgentId);
+  await lockAccount(tx, seller);
+  const balance = await getBalance(tx, seller);
+  if (balance < args.amount) {
+    throw new InsufficientFundsError(seller, args.amount, balance);
+  }
+  await postMovement(tx, {
+    from: seller,
+    to: PLATFORM_ESCROW,
+    amount: args.amount,
+    entryType: 'appeal_deposit',
+    orderId: args.orderId,
+  });
+}
+
+/** Return or forfeit whatever appeal deposit is held for the order. */
+export async function settleAppealDeposit(
+  tx: Tx,
+  args: { orderId: string; sellerAgentId: string; outcome: 'refund' | 'forfeit' },
+): Promise<bigint> {
+  const held = await depositHeld(tx, args.orderId);
+  if (held <= 0n) return 0n;
+  await postMovement(tx, {
+    from: PLATFORM_ESCROW,
+    to: args.outcome === 'refund' ? agentAccount(args.sellerAgentId) : PLATFORM_FEES,
+    amount: held,
+    entryType: args.outcome === 'refund' ? 'appeal_deposit_refund' : 'appeal_deposit_forfeit',
+    orderId: args.orderId,
+  });
+  return held;
 }
 
 /**

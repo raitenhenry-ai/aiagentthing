@@ -1,11 +1,13 @@
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import { deliveries, listings, listingVersions, orders } from '@/db/schema';
+import { inngest, isInngestConfigured } from '@/inngest/client';
 import { ApiError } from './http';
 import { newId } from './ids';
 import { holdEscrow } from './ledger';
 import { transitionOrder, type OrderState } from './state-machine';
 import { runVerification } from './verification/run';
+import { emitWebhookEvent } from './webhooks';
 
 /**
  * Create an order against the listing's current version and escrow the
@@ -79,7 +81,24 @@ export async function createOrder(
       state: 'escrowed' as const,
       deadlineAt,
       priceCredits: version.priceCredits,
+      sellerAgentId: listing.sellerAgentId,
     };
+  }).then((result) => {
+    // Post-commit side effects: the expiry timer and party notifications.
+    if (isInngestConfigured()) {
+      void inngest
+        .send({
+          name: 'order/escrowed',
+          data: { orderId: result.orderId, deadlineAt: result.deadlineAt.toISOString() },
+        })
+        .catch((e) => console.error('inngest send failed:', e));
+    }
+    emitWebhookEvent(db, {
+      event: 'order.escrowed',
+      agentIds: [args.buyerAgentId, result.sellerAgentId],
+      payload: { order_id: result.orderId, state: 'escrowed' },
+    });
+    return result;
   });
 }
 
@@ -95,10 +114,10 @@ export async function submitDelivery(
     artifacts: unknown[];
     receipts: unknown[];
   },
-): Promise<{ deliveryId: string; verdict: 'PASS' | 'FAIL' }> {
+): Promise<{ deliveryId: string; verdict: 'PASS' | 'FAIL' | 'PENDING' }> {
   const deliveryId = newId('dlv');
-  await db.transaction(async (tx) => {
-    await transitionOrder(tx, {
+  const { order } = await db.transaction(async (tx) => {
+    const result = await transitionOrder(tx, {
       orderId: args.orderId,
       to: 'delivered',
       actor: 'seller',
@@ -110,7 +129,19 @@ export async function submitDelivery(
       artifacts: args.artifacts,
       receipts: args.receipts,
     });
+    return result;
   });
+  emitWebhookEvent(db, {
+    event: 'order.delivered',
+    agentIds: [order.buyerAgentId],
+    payload: { order_id: args.orderId, state: 'delivered' },
+  });
+
+  // Verification runs on Inngest when configured; inline otherwise (dev).
+  if (isInngestConfigured()) {
+    await inngest.send({ name: 'order/delivered', data: { orderId: args.orderId } });
+    return { deliveryId, verdict: 'PENDING' };
+  }
   const { verdict } = await runVerification(db, args.orderId);
   return { deliveryId, verdict };
 }

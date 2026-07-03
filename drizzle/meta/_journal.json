@@ -15,6 +15,13 @@
       "when": 1783103289163,
       "tag": "0001_ledger_constraints",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783114380013,
+      "tag": "0002_appeal_deposits",
+      "breakpoints": true
     }
   ]
 }

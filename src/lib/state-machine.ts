@@ -1,9 +1,16 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db, Tx } from '@/db/client';
-import { agents, listings, orders, reputationEvents } from '@/db/schema';
-import { failOverrideWindowSeconds, platformFeeBps } from './env';
+import { listings, orders, reputationEvents, verifications } from '@/db/schema';
+import { recomputeAndStore } from './reputation';
+import { appealDepositBps, failOverrideWindowSeconds, platformFeeBps } from './env';
 import { newId } from './ids';
-import { refundEscrow, releaseEscrow } from './ledger';
+import {
+  feeFor,
+  holdAppealDeposit,
+  refundEscrow,
+  releaseEscrow,
+  settleAppealDeposit,
+} from './ledger';
 
 // ---------------------------------------------------------------------------
 // States, actors, transitions
@@ -161,14 +168,6 @@ async function recordReputationEvent(
     delta,
     reason,
   });
-  // Phase 1 placeholder scoring: nudge the 0-100 score by the event delta.
-  // The Phase 3 reputation engine recomputes from events + ledger wholesale.
-  await tx
-    .update(agents)
-    .set({
-      reputationScore: sql`LEAST(100, GREATEST(0, ${agents.reputationScore} + ${delta}))`,
-    })
-    .where(eq(agents.id, agentId));
 }
 
 /**
@@ -234,6 +233,26 @@ export async function transitionOrder(
       );
     }
 
+    // Opening an appeal holds the seller's 5% deposit — unless the verdict
+    // came from the `panel` tier (split/low-confidence), which is appealable
+    // at no fee by design.
+    if (args.to === 'appealed') {
+      const tierRows = await tx
+        .select({ tier: verifications.tier })
+        .from(verifications)
+        .where(eq(verifications.orderId, order.id))
+        .orderBy(sql`${verifications.completedAt} DESC`)
+        .limit(1);
+      const freeAppeal = tierRows[0]?.tier === 'panel';
+      if (!freeAppeal) {
+        await holdAppealDeposit(tx, {
+          orderId: order.id,
+          sellerAgentId,
+          amount: feeFor(order.priceCredits, appealDepositBps()),
+        });
+      }
+    }
+
     // Settlement side effects — the only place funds ever move.
     if (isSettled(args.to)) {
       if (order.settledAt !== null) {
@@ -257,9 +276,26 @@ export async function transitionOrder(
           order.state === 'expired' ? 'seller_missed_deadline' : 'order_failed_refund';
         await recordReputationEvent(tx, sellerAgentId, order.id, -2, reason);
       }
+      // Appeal deposit: returned to the seller when the appeal succeeds (or
+      // the buyer overrides), forfeited to platform fees when it fails.
+      if (order.state === 'appealed') {
+        await settleAppealDeposit(tx, {
+          orderId: order.id,
+          sellerAgentId,
+          outcome: args.to === 'settled_refund' ? 'forfeit' : 'refund',
+        });
+      }
     }
 
     await tx.update(orders).set(update).where(eq(orders.id, order.id));
+
+    // Every settlement recomputes both parties' scores from settled data
+    // (the reputation engine reads orders/deliveries/disputes, so this runs
+    // after the state write, inside the same transaction).
+    if (isSettled(args.to)) {
+      await recomputeAndStore(tx, sellerAgentId);
+      await recomputeAndStore(tx, order.buyerAgentId);
+    }
 
     const updated: OrderRow = {
       ...order,

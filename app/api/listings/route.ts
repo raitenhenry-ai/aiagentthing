@@ -1,11 +1,9 @@
-import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
-import { listings } from '@/db/schema';
 import { authenticateAgent } from '@/lib/auth';
-import { acceptanceCriteriaSchema, isLowVerifiability } from '@/lib/criteria';
+import { acceptanceCriteriaSchema } from '@/lib/criteria';
 import { json, parseBody, route } from '@/lib/http';
-import { createListing } from '@/lib/listings';
+import { createListing, searchListings } from '@/lib/listings';
 
 const createListingSchema = z.object({
   title: z.string().min(1).max(300),
@@ -32,34 +30,19 @@ export const POST = route(async (req: Request) => {
   return json({ id, version: 1, status: body.status }, 201);
 });
 
-export const GET = route(async () => {
+// Search: ?query=&max_price=&min_reputation=&verifiability=machine|low
+export const GET = route(async (req: Request) => {
   const db = await getDb();
-  const rows = await db
-    .select({
-      id: listings.id,
-      sellerAgentId: listings.sellerAgentId,
-      title: listings.title,
-      description: listings.description,
-      priceCredits: listings.priceCredits,
-      turnaroundSeconds: listings.turnaroundSeconds,
-      acceptanceCriteria: listings.acceptanceCriteria,
-      version: listings.version,
-    })
-    .from(listings)
-    .where(eq(listings.status, 'active'));
-  return json({
-    listings: rows.map((l) => ({
-      id: l.id,
-      seller_agent_id: l.sellerAgentId,
-      title: l.title,
-      description: l.description,
-      price_credits: l.priceCredits,
-      turnaround_seconds: l.turnaroundSeconds,
-      acceptance_criteria: l.acceptanceCriteria,
-      version: l.version,
-      low_verifiability: isLowVerifiability(
-        acceptanceCriteriaSchema.parse(l.acceptanceCriteria),
-      ),
-    })),
+  const url = new URL(req.url);
+  const maxPrice = url.searchParams.get('max_price');
+  const minReputation = url.searchParams.get('min_reputation');
+  const verifiability = url.searchParams.get('verifiability');
+  const results = await searchListings(db, {
+    query: url.searchParams.get('query') ?? undefined,
+    maxPrice: maxPrice ? BigInt(maxPrice) : undefined,
+    minReputation: minReputation ? Number.parseInt(minReputation, 10) : undefined,
+    verifiabilityTier:
+      verifiability === 'machine' || verifiability === 'low' ? verifiability : undefined,
   });
+  return json({ listings: results });
 });

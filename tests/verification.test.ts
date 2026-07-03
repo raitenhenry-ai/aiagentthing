@@ -30,7 +30,7 @@ describe('verification pipeline', () => {
     const { verdict } = await submitDelivery(db, {
       orderId,
       sellerAgentId: seller.id,
-      artifacts: [{ inline: 'result' }],
+      artifacts: [{ inline: { summary: 'result' } }],
       receipts: [{ step: 'did the work' }],
     });
     expect(verdict).toBe('PASS');
@@ -69,11 +69,13 @@ describe('verification pipeline', () => {
     await submitDelivery(db, {
       orderId,
       sellerAgentId: seller.id,
-      artifacts: [{ inline: 'x' }],
+      artifacts: [{ inline: { summary: 'x' } }],
       receipts: [],
     });
     const vRows = await db.select().from(verifications).where(eq(verifications.orderId, orderId));
-    const verdicts = vRows[0]!.judgeVerdicts as Array<Record<string, unknown>>;
+    const record = vRows[0]!.judgeVerdicts as { runs: Array<Array<Record<string, unknown>>> };
+    const verdicts = record.runs.flat();
+    expect(verdicts.length).toBeGreaterThan(0);
     for (const v of verdicts) {
       expect(v.reasoningHash).toMatch(/^[a-f0-9]{64}$/);
       expect(v).not.toHaveProperty('reasoning');

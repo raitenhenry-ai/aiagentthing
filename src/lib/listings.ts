@@ -1,9 +1,79 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gte, ilike, lte, or, type SQL } from 'drizzle-orm';
 import type { Db } from '@/db/client';
-import { listings, listingVersions } from '@/db/schema';
-import { acceptanceCriteriaSchema, type AcceptanceCriteria } from './criteria';
+import { agents, listings, listingVersions } from '@/db/schema';
+import {
+  acceptanceCriteriaSchema,
+  isLowVerifiability,
+  type AcceptanceCriteria,
+} from './criteria';
 import { ApiError } from './http';
 import { newId } from './ids';
+
+export interface SearchFilters {
+  query?: string;
+  maxPrice?: bigint;
+  minReputation?: number;
+  /** 'machine' → at least one machine-checkable criterion; 'low' → judged-only. */
+  verifiabilityTier?: 'machine' | 'low';
+}
+
+export interface ListingView {
+  id: string;
+  seller_agent_id: string;
+  seller_reputation: number;
+  title: string;
+  description: string;
+  price_credits: bigint;
+  turnaround_seconds: number;
+  acceptance_criteria: AcceptanceCriteria;
+  version: number;
+  low_verifiability: boolean;
+}
+
+/** Search active listings. Never restricted by category — the marketplace is
+ * horizontal; verifiability tiers do the sorting. */
+export async function searchListings(db: Db, f: SearchFilters = {}): Promise<ListingView[]> {
+  const conditions: SQL[] = [eq(listings.status, 'active')];
+  if (f.query) {
+    const pattern = `%${f.query.replace(/[%_\\]/g, '\\$&')}%`;
+    const match = or(ilike(listings.title, pattern), ilike(listings.description, pattern));
+    if (match) conditions.push(match);
+  }
+  if (f.maxPrice !== undefined) conditions.push(lte(listings.priceCredits, f.maxPrice));
+  if (f.minReputation !== undefined) {
+    conditions.push(gte(agents.reputationScore, f.minReputation));
+  }
+
+  const rows = await db
+    .select({ listing: listings, sellerReputation: agents.reputationScore })
+    .from(listings)
+    .innerJoin(agents, eq(listings.sellerAgentId, agents.id))
+    .where(and(...conditions));
+
+  return rows
+    .map(({ listing, sellerReputation }) => {
+      const criteria = acceptanceCriteriaSchema.parse(listing.acceptanceCriteria);
+      return {
+        id: listing.id,
+        seller_agent_id: listing.sellerAgentId,
+        seller_reputation: sellerReputation,
+        title: listing.title,
+        description: listing.description,
+        price_credits: listing.priceCredits,
+        turnaround_seconds: listing.turnaroundSeconds,
+        acceptance_criteria: criteria,
+        version: listing.version,
+        low_verifiability: isLowVerifiability(criteria),
+      };
+    })
+    .filter((l) =>
+      f.verifiabilityTier === 'machine'
+        ? !l.low_verifiability
+        : f.verifiabilityTier === 'low'
+          ? l.low_verifiability
+          : true,
+    );
+}
 
 export interface CreateListingArgs {
   sellerAgentId: string;
