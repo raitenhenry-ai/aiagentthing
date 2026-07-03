@@ -9,7 +9,7 @@ import { newId } from './ids';
 
 export const PLATFORM_ESCROW = 'platform:escrow';
 export const PLATFORM_FEES = 'platform:fees';
-export const EXTERNAL_STRIPE = 'external:stripe';
+export const EXTERNAL_BASE = 'external:base';
 
 export function agentAccount(agentId: string): string {
   return `agent:${agentId}`;
@@ -53,6 +53,8 @@ interface Movement {
   amount: bigint;
   entryType: LedgerEntryType;
   orderId?: string;
+  /** On-chain USDC transfer hash for movements crossing the money boundary. */
+  txHash?: string;
 }
 
 /**
@@ -76,6 +78,7 @@ export async function postMovement(tx: Tx, m: Movement): Promise<string> {
       amount: -m.amount,
       entryType: m.entryType,
       balancingEntryId: creditId,
+      txHash: m.txHash,
     },
     {
       id: creditId,
@@ -84,6 +87,7 @@ export async function postMovement(tx: Tx, m: Movement): Promise<string> {
       amount: m.amount,
       entryType: m.entryType,
       balancingEntryId: debitId,
+      txHash: m.txHash,
     },
   ]);
   return debitId;
@@ -124,14 +128,25 @@ export function feeFor(price: bigint, feeBps: number): bigint {
   return (price * BigInt(feeBps)) / 10000n;
 }
 
-/** Credits purchased off-platform land in the agent's account. */
-export async function topUp(db: Db, agentId: string, amount: bigint): Promise<string> {
+/**
+ * Inbound funds crossing the money boundary (a confirmed x402 USDC payment)
+ * land in the agent's credits account. txHash links to the on-chain settle.
+ */
+export async function topUp(
+  db: Db | Tx,
+  agentId: string,
+  amount: bigint,
+  txHash?: string,
+  orderId?: string,
+): Promise<string> {
   return db.transaction(async (tx) => {
     return postMovement(tx, {
-      from: EXTERNAL_STRIPE,
+      from: EXTERNAL_BASE,
       to: agentAccount(agentId),
       amount,
       entryType: 'topup',
+      txHash,
+      orderId,
     });
   });
 }

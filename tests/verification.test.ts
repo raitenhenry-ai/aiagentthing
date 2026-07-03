@@ -4,12 +4,19 @@ import type { Db } from '@/db/client';
 import { deliveries, orders, verifications } from '@/db/schema';
 import { newId } from '@/lib/ids';
 import { agentAccount, getBalance } from '@/lib/ledger';
-import { createOrder, submitDelivery } from '@/lib/orders';
+import { submitDelivery } from '@/lib/orders';
+import { getMockRail } from '@/lib/payments';
 import { transitionOrder } from '@/lib/state-machine';
 import { aggregateVerdicts } from '@/lib/verification/judge';
 import { runVerification } from '@/lib/verification/run';
 import { StubJudge } from '@/lib/verification/stub-judge';
-import { createTestDb, fund, makeAgent, makeListing, type TestAgent } from './helpers';
+import {
+  createTestDb,
+  makeAgent,
+  makeEscrowedOrder,
+  makeListing,
+  type TestAgent,
+} from './helpers';
 
 let db: Db;
 let buyer: TestAgent;
@@ -21,12 +28,11 @@ beforeEach(async () => {
   buyer = await makeAgent(db, 'buyer');
   seller = await makeAgent(db, 'seller');
   listingId = await makeListing(db, seller.id, { priceCredits: 1000n });
-  await fund(db, buyer.id, 5000n);
 });
 
 describe('verification pipeline', () => {
   it('stub judge PASS settles the order and pays the seller', async () => {
-    const { orderId } = await createOrder(db, { buyerAgentId: buyer.id, listingId, inputPayload: {} });
+    const orderId = await makeEscrowedOrder(db, buyer, listingId, {});
     const { verdict } = await submitDelivery(db, {
       orderId,
       sellerAgentId: seller.id,
@@ -36,7 +42,7 @@ describe('verification pipeline', () => {
     expect(verdict).toBe('PASS');
     const row = (await db.select().from(orders).where(eq(orders.id, orderId)))[0]!;
     expect(row.state).toBe('settled_released');
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(900n);
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(900n);
 
     const vRows = await db.select().from(verifications).where(eq(verifications.orderId, orderId));
     expect(vRows).toHaveLength(1);
@@ -45,7 +51,7 @@ describe('verification pipeline', () => {
   });
 
   it('FAIL panel leaves order in failed with the override window open, funds still held', async () => {
-    const { orderId } = await createOrder(db, { buyerAgentId: buyer.id, listingId, inputPayload: {} });
+    const orderId = await makeEscrowedOrder(db, buyer, listingId, {});
     await db.transaction((tx) =>
       transitionOrder(tx, { orderId, to: 'delivered', actor: 'seller', agentId: seller.id }),
     );
@@ -60,12 +66,14 @@ describe('verification pipeline', () => {
     const row = (await db.select().from(orders).where(eq(orders.id, orderId)))[0]!;
     expect(row.state).toBe('failed');
     expect(row.failWindowEndsAt).not.toBeNull();
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
-    expect(await getBalance(db, agentAccount(buyer.id))).toBe(4000n);
+    // No release: seller wallet empty, funds still held in escrow.
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(0n);
+    expect(getMockRail().balanceOf(buyer.wallet)).toBe(0n);
+    expect(await getBalance(db, agentAccount(buyer.id))).toBe(0n);
   });
 
   it('verdicts store hashed reasoning only', async () => {
-    const { orderId } = await createOrder(db, { buyerAgentId: buyer.id, listingId, inputPayload: {} });
+    const orderId = await makeEscrowedOrder(db, buyer, listingId, {});
     await submitDelivery(db, {
       orderId,
       sellerAgentId: seller.id,

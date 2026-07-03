@@ -66,30 +66,45 @@ export const ledgerEntryTypeEnum = pgEnum('ledger_entry_type', [
 // Tables
 // ---------------------------------------------------------------------------
 
-export const accounts = pgTable('accounts', {
-  id: text('id').primaryKey(),
-  email: text('email').notNull().unique(),
-  stripeCustomerId: text('stripe_customer_id'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
+// Identity = wallet. An agent IS its Base wallet address; the record is
+// auto-created on first authenticated interaction. No emails, no humans.
 export const agents = pgTable(
   'agents',
   {
     id: text('id').primaryKey(),
-    accountId: text('account_id')
-      .notNull()
-      .references(() => accounts.id),
-    name: text('name').notNull(),
+    walletAddress: text('wallet_address').notNull(),
+    name: text('name').notNull().default(''),
     capabilities: jsonb('capabilities').$type<string[]>().notNull().default([]),
-    apiKeyHash: text('api_key_hash').notNull(),
     status: agentStatusEnum('status').notNull().default('active'),
     reputationScore: integer('reputation_score').notNull().default(50),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    apiKeyHashIdx: uniqueIndex('agents_api_key_hash_idx').on(t.apiKeyHash),
-    accountIdx: index('agents_account_id_idx').on(t.accountId),
+    walletIdx: uniqueIndex('agents_wallet_address_idx').on(t.walletAddress),
+  }),
+);
+
+// SIWE-style auth: single-use challenge nonces, then bearer session tokens
+// (stored hashed) minted after wallet-signature verification.
+export const authNonces = pgTable('auth_nonces', {
+  nonce: text('nonce').primaryKey(),
+  walletAddress: text('wallet_address').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const sessions = pgTable(
+  'sessions',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    agentIdx: index('sessions_agent_id_idx').on(t.agentId),
   }),
 );
 
@@ -229,6 +244,8 @@ export const ledgerEntries = pgTable(
     amount: bigint('amount', { mode: 'bigint' }).notNull(),
     entryType: ledgerEntryTypeEnum('entry_type').notNull(),
     balancingEntryId: text('balancing_entry_id').notNull(),
+    // On-chain settlement reference (USDC transfer) for topup/withdrawal rows.
+    txHash: text('tx_hash'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -268,6 +285,41 @@ export const webhooks = pgTable(
   },
   (t) => ({
     agentIdx: index('webhooks_agent_id_idx').on(t.agentId),
+  }),
+);
+
+export const payoutStatusEnum = pgEnum('payout_status', [
+  'pending',
+  'confirmed',
+  'failed',
+]);
+
+// On-chain payout queue. Settlement writes ledger entries and enqueues a
+// payout; the transfer executes separately with idempotency + retries. A
+// failed payout NEVER re-runs settlement logic — only the transfer retries.
+export const payouts = pgTable(
+  'payouts',
+  {
+    id: text('id').primaryKey(),
+    orderId: text('order_id')
+      .notNull()
+      .references(() => orders.id),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    toWallet: text('to_wallet').notNull(),
+    amountCredits: bigint('amount_credits', { mode: 'bigint' }).notNull(),
+    reason: text('reason').notNull(), // release | refund | override | deposit_refund
+    status: payoutStatusEnum('status').notNull().default('pending'),
+    txHash: text('tx_hash'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+  },
+  (t) => ({
+    orderIdx: index('payouts_order_id_idx').on(t.orderId),
+    statusIdx: index('payouts_status_idx').on(t.status),
   }),
 );
 

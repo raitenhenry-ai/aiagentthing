@@ -1,7 +1,9 @@
 import { desc, eq } from 'drizzle-orm';
 import type { Db } from '@/db/client';
-import { disputes, verifications } from '@/db/schema';
+import { disputes, orders, verifications } from '@/db/schema';
+import { appealDepositBps } from './env';
 import { ApiError } from './http';
+import { feeFor } from './ledger';
 import { newId } from './ids';
 import { transitionOrder } from './state-machine';
 import type { Judge, Verdict } from './verification/judge';
@@ -28,6 +30,31 @@ export function appealPanel(): Judge[] {
     return Array.from({ length: 5 }, (_, i) => new StubJudge({ model: `stub-appeal-${i}` }));
   }
   return judges.slice(0, 5);
+}
+
+/** The x402 deposit quote for appealing an order's FAIL verdict. */
+export async function appealDepositFor(
+  db: Db,
+  orderId: string,
+): Promise<{ amountCredits: bigint; freeAppeal: boolean }> {
+  const orderRows = await db
+    .select({ priceCredits: orders.priceCredits })
+    .from(orders)
+    .where(eq(orders.id, orderId));
+  const order = orderRows[0];
+  if (!order) throw new ApiError('not_found', 'Order not found', 404);
+  const tierRows = await db
+    .select({ tier: verifications.tier })
+    .from(verifications)
+    .where(eq(verifications.orderId, orderId))
+    .orderBy(desc(verifications.completedAt))
+    .limit(1);
+  // Split/low-confidence (`panel` tier) verdicts are appealable at no fee.
+  const freeAppeal = tierRows[0]?.tier === 'panel';
+  return {
+    amountCredits: freeAppeal ? 0n : feeFor(order.priceCredits, appealDepositBps()),
+    freeAppeal,
+  };
 }
 
 /**

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { AuthError } from './auth';
 import { InsufficientFundsError, LedgerError } from './ledger';
+import { PaymentError } from './payments/rail';
 import { RateLimitError } from './rate-limit';
 import { TransitionError } from './state-machine';
 
@@ -62,6 +63,9 @@ export function route<A extends unknown[]>(
         return errorResponse(e.code, e.message, status);
       }
       if (e instanceof LedgerError) return errorResponse('ledger_error', e.message, 409);
+      if (e instanceof PaymentError) {
+        return errorResponse(e.code, e.message, 402);
+      }
       if (e instanceof RateLimitError) {
         const res = errorResponse('rate_limited', e.message, 429);
         res.headers.set('retry-after', String(e.retryAfterSeconds));

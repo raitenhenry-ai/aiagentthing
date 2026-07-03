@@ -1,6 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db, Tx } from '@/db/client';
-import { listings, orders, reputationEvents, verifications } from '@/db/schema';
+import { agents, listings, orders, reputationEvents, verifications } from '@/db/schema';
+import { enqueuePayout } from './payments/payouts';
 import { recomputeAndStore } from './reputation';
 import { appealDepositBps, failOverrideWindowSeconds, platformFeeBps } from './env';
 import { newId } from './ids';
@@ -189,7 +190,7 @@ export async function transitionOrder(
     now?: Date;
   },
 ): Promise<TransitionResult> {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const now = args.now ?? new Date();
     const order = await lockOrder(tx, args.orderId);
     const transition = assertTransition(order.state, args.to, args.actor);
@@ -253,25 +254,51 @@ export async function transitionOrder(
       }
     }
 
-    // Settlement side effects — the only place funds ever move.
+    // Settlement side effects — the only place funds ever move. Ledger
+    // entries commit atomically with the state write; the matching on-chain
+    // USDC payouts are enqueued here and executed AFTER commit (a failed
+    // transfer retries on its own, it never re-runs settlement logic).
     if (isSettled(args.to)) {
       if (order.settledAt !== null) {
         throw new TransitionError('guard_failed', `Order ${order.id} already settled`);
       }
       update.settledAt = now;
+      const walletOf = async (agentId: string): Promise<string> => {
+        const rows = await tx
+          .select({ wallet: agents.walletAddress })
+          .from(agents)
+          .where(eq(agents.id, agentId));
+        const wallet = rows[0]?.wallet;
+        if (!wallet) throw new TransitionError('guard_failed', `Agent ${agentId} not found`);
+        return wallet;
+      };
       if (args.to === 'settled_released' || args.to === 'settled_override') {
-        await releaseEscrow(tx, {
+        const { net } = await releaseEscrow(tx, {
           orderId: order.id,
           sellerAgentId,
           feeBps: platformFeeBps(),
           entryType: args.to === 'settled_override' ? 'override_payment' : 'escrow_release',
+        });
+        await enqueuePayout(tx, {
+          orderId: order.id,
+          agentId: sellerAgentId,
+          toWallet: await walletOf(sellerAgentId),
+          amountCredits: net,
+          reason: args.to === 'settled_override' ? 'override' : 'release',
         });
         const reason =
           args.to === 'settled_override' ? 'settled_via_buyer_override' : 'order_passed';
         await recordReputationEvent(tx, sellerAgentId, order.id, args.to === 'settled_released' ? 2 : 1, reason);
         await recordReputationEvent(tx, order.buyerAgentId, order.id, 1, 'order_settled');
       } else {
-        await refundEscrow(tx, { orderId: order.id, buyerAgentId: order.buyerAgentId });
+        const refunded = await refundEscrow(tx, { orderId: order.id, buyerAgentId: order.buyerAgentId });
+        await enqueuePayout(tx, {
+          orderId: order.id,
+          agentId: order.buyerAgentId,
+          toWallet: await walletOf(order.buyerAgentId),
+          amountCredits: refunded,
+          reason: 'refund',
+        });
         const reason =
           order.state === 'expired' ? 'seller_missed_deadline' : 'order_failed_refund';
         await recordReputationEvent(tx, sellerAgentId, order.id, -2, reason);
@@ -279,11 +306,21 @@ export async function transitionOrder(
       // Appeal deposit: returned to the seller when the appeal succeeds (or
       // the buyer overrides), forfeited to platform fees when it fails.
       if (order.state === 'appealed') {
-        await settleAppealDeposit(tx, {
+        const outcome = args.to === 'settled_refund' ? 'forfeit' : 'refund';
+        const deposit = await settleAppealDeposit(tx, {
           orderId: order.id,
           sellerAgentId,
-          outcome: args.to === 'settled_refund' ? 'forfeit' : 'refund',
+          outcome,
         });
+        if (outcome === 'refund' && deposit > 0n) {
+          await enqueuePayout(tx, {
+            orderId: order.id,
+            agentId: sellerAgentId,
+            toWallet: await walletOf(sellerAgentId),
+            amountCredits: deposit,
+            reason: 'deposit_refund',
+          });
+        }
       }
     }
 
@@ -308,4 +345,15 @@ export async function transitionOrder(
     };
     return { order: updated, transition };
   });
+
+  // Post-commit: execute the on-chain payouts for a settled order. Errors
+  // are recorded on the payout rows and retried by the payout worker — a
+  // failed transfer can never unwind or re-run the settlement above.
+  if (isSettled(result.order.state)) {
+    const { processPayoutsForOrder } = await import('./payments/payouts');
+    await processPayoutsForOrder(db, result.order.id).catch((e) =>
+      console.error(`payout processing failed for ${result.order.id}:`, e),
+    );
+  }
+  return result;
 }

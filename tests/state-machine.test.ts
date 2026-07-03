@@ -3,7 +3,9 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import { ledgerEntries, orders } from '@/db/schema';
 import { agentAccount, getBalance, ledgerSum, PLATFORM_FEES } from '@/lib/ledger';
-import { createOrder } from '@/lib/orders';
+import { createOrderQuote, payForOrder } from '@/lib/orders';
+import { getMockRail } from '@/lib/payments';
+import { MockRail } from '@/lib/payments/mock-rail';
 import {
   findTransition,
   isSettled,
@@ -13,7 +15,15 @@ import {
   type Actor,
   type OrderState,
 } from '@/lib/state-machine';
-import { createTestDb, fund, makeAgent, makeListing, type TestAgent } from './helpers';
+import {
+  createTestDb,
+  fund,
+  fundWallet,
+  makeAgent,
+  makeEscrowedOrder,
+  makeListing,
+  type TestAgent,
+} from './helpers';
 
 const ALL_STATES: OrderState[] = [
   'created',
@@ -40,16 +50,10 @@ beforeEach(async () => {
   buyer = await makeAgent(db, 'buyer');
   seller = await makeAgent(db, 'seller');
   listingId = await makeListing(db, seller.id, { priceCredits: 1000n });
-  await fund(db, buyer.id, 10_000n);
 });
 
 async function newEscrowedOrder(): Promise<string> {
-  const { orderId } = await createOrder(db, {
-    buyerAgentId: buyer.id,
-    listingId,
-    inputPayload: { doc: 'hello' },
-  });
-  return orderId;
+  return makeEscrowedOrder(db, buyer, listingId);
 }
 
 /** Drive an order into the given state through legal transitions only. */
@@ -152,10 +156,14 @@ describe('legal transitions', () => {
 
   it('happy path: escrowed → delivered → verifying → passed → settled_released moves funds once', async () => {
     const orderId = await newEscrowedOrder();
-    expect(await getBalance(db, agentAccount(buyer.id))).toBe(9_000n);
+    // Inbound 1000 escrowed; buyer credits net zero, wallet drained.
+    expect(await getBalance(db, agentAccount(buyer.id))).toBe(0n);
+    expect(getMockRail().balanceOf(buyer.wallet)).toBe(0n);
     await driveTo(orderId, 'settled_released');
     expect(await orderState(orderId)).toBe('settled_released');
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(900n);
+    // Payout executed: 900 USDC on the seller's wallet, fee stays as credits.
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(900n);
+    expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
     expect(await getBalance(db, PLATFORM_FEES)).toBe(100n);
     expect(await ledgerSum(db)).toBe(0n);
   });
@@ -164,15 +172,17 @@ describe('legal transitions', () => {
     const orderId = await newEscrowedOrder();
     await driveTo(orderId, 'settled_refund');
     expect(await orderState(orderId)).toBe('settled_refund');
-    expect(await getBalance(db, agentAccount(buyer.id))).toBe(10_000n);
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
+    // Refund payout lands back on the buyer's wallet, no fee taken.
+    expect(getMockRail().balanceOf(buyer.wallet)).toBe(1000n);
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(0n);
+    expect(await getBalance(db, agentAccount(buyer.id))).toBe(0n);
   });
 
   it('FAIL then buyer override pays the seller (minus fee)', async () => {
     const orderId = await newEscrowedOrder();
     await driveTo(orderId, 'settled_override');
     expect(await orderState(orderId)).toBe('settled_override');
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(900n);
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(900n);
     const entries = await db.select().from(ledgerEntries).where(eq(ledgerEntries.orderId, orderId));
     expect(entries.some((e) => e.entryType === 'override_payment')).toBe(true);
   });
@@ -182,7 +192,7 @@ describe('legal transitions', () => {
     const future = new Date(Date.now() + 7200_000);
     await transitionOrder(db, { orderId, to: 'expired', actor: 'system', now: future });
     await transitionOrder(db, { orderId, to: 'settled_refund', actor: 'system', now: future });
-    expect(await getBalance(db, agentAccount(buyer.id))).toBe(10_000n);
+    expect(getMockRail().balanceOf(buyer.wallet)).toBe(1000n);
   });
 
   it('appeal path: failed → appealed → settled_released pays the seller and returns the deposit', async () => {
@@ -193,8 +203,9 @@ describe('legal transitions', () => {
     // Deposit held while the appeal is pending.
     expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
     await transitionOrder(db, { orderId, to: 'settled_released', actor: 'system' });
-    // 900 release + 50 deposit back.
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(950n);
+    // 900 release + 50 deposit back, both paid out on-chain.
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(950n);
+    expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
     expect(await ledgerSum(db)).toBe(0n);
   });
 
@@ -203,8 +214,8 @@ describe('legal transitions', () => {
     const orderId = await newEscrowedOrder();
     await driveTo(orderId, 'appealed');
     await transitionOrder(db, { orderId, to: 'settled_refund', actor: 'system' });
-    expect(await getBalance(db, agentAccount(buyer.id))).toBe(10_000n);
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
+    expect(getMockRail().balanceOf(buyer.wallet)).toBe(1000n);
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(0n);
     expect(await getBalance(db, PLATFORM_FEES)).toBe(50n);
     expect(await ledgerSum(db)).toBe(0n);
   });
@@ -247,7 +258,7 @@ describe('illegal transitions — full matrix', () => {
         transitionOrder(db, { orderId, to, actor: 'seller', agentId: seller.id }),
       ).rejects.toThrow(TransitionError);
     }
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(0n);
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(0n);
   });
 
   it('a non-party agent cannot act as buyer or seller', async () => {
@@ -309,7 +320,10 @@ describe('settlement invariants', () => {
       .select()
       .from(ledgerEntries)
       .where(eq(ledgerEntries.orderId, orderId));
-    expect(holdEntries.every((e) => e.entryType === 'escrow_hold')).toBe(true);
+    // Pre-settlement the order has only its inbound payment + escrow hold.
+    expect(
+      holdEntries.every((e) => e.entryType === 'escrow_hold' || e.entryType === 'topup'),
+    ).toBe(true);
 
     for (const target of ['delivered', 'verifying', 'passed'] as OrderState[]) {
       // walk one step at a time and confirm no new ledger rows appear
@@ -341,7 +355,7 @@ describe('settlement invariants', () => {
       }
     }
     // Seller was paid exactly once.
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(900n);
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(900n);
     expect(await ledgerSum(db)).toBe(0n);
   });
 
@@ -354,17 +368,27 @@ describe('settlement invariants', () => {
     ]);
     const succeeded = results.filter((r) => r.status === 'fulfilled').length;
     expect(succeeded).toBe(1);
-    expect(await getBalance(db, agentAccount(seller.id))).toBe(900n);
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(900n);
   });
 
-  it('insufficient funds: order creation is rejected and nothing persists', async () => {
+  it('an unfunded wallet cannot escrow: payment fails and the order stays unpaid', async () => {
     const poor = await makeAgent(db, 'poor');
-    await fund(db, poor.id, 10n);
+    fundWallet(poor.wallet, 10n); // far below the 1000-credit price
+    const quote = await createOrderQuote(db, {
+      buyerAgentId: poor.id,
+      listingId,
+      inputPayload: {},
+    });
     await expect(
-      createOrder(db, { buyerAgentId: poor.id, listingId, inputPayload: {} }),
-    ).rejects.toThrow();
+      payForOrder(db, {
+        orderId: quote.orderId,
+        buyerAgentId: poor.id,
+        buyerWallet: poor.wallet,
+        paymentHeader: MockRail.paymentHeader(poor.wallet),
+      }),
+    ).rejects.toThrow(/cannot cover/);
     const rows = await db.select().from(orders).where(eq(orders.buyerAgentId, poor.id));
-    expect(rows).toEqual([]);
-    expect(await getBalance(db, agentAccount(poor.id))).toBe(10n);
+    expect(rows[0]!.state).toBe('created'); // quote persists, escrow never happened
+    expect(await getBalance(db, agentAccount(poor.id))).toBe(0n);
   });
 });

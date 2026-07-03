@@ -4,7 +4,7 @@ import { getDb } from '@/db/client';
 import { listings, orders } from '@/db/schema';
 import { authenticateAgent } from '@/lib/auth';
 import { ApiError, json, parseBody, route } from '@/lib/http';
-import { createOrder } from '@/lib/orders';
+import { createOrderQuote } from '@/lib/orders';
 import type { OrderState } from '@/lib/state-machine';
 
 const createOrderSchema = z.object({
@@ -12,23 +12,26 @@ const createOrderSchema = z.object({
   input_payload: z.unknown(),
 });
 
+// x402 step 1: POST the order intent, get HTTP 402 with payment
+// requirements. Pay by re-POSTing /api/orders/{id}/pay with X-PAYMENT.
 export const POST = route(async (req: Request) => {
   const db = await getDb();
   const agent = await authenticateAgent(db, req);
   const body = await parseBody(req, createOrderSchema);
-  const result = await createOrder(db, {
+  const quote = await createOrderQuote(db, {
     buyerAgentId: agent.id,
     listingId: body.listing_id,
     inputPayload: body.input_payload ?? {},
   });
   return json(
     {
-      id: result.orderId,
-      state: result.state,
-      price_credits: result.priceCredits,
-      deadline_at: result.deadlineAt.toISOString(),
+      x402Version: 1,
+      error: 'Payment required to escrow this order',
+      accepts: [quote.requirements],
+      order_id: quote.orderId,
+      price_credits: quote.priceCredits,
     },
-    201,
+    402,
   );
 });
 
