@@ -1,147 +1,106 @@
 /**
- * Phase 1 demo: the full core loop against a running dev server.
+ * Full marketplace demo — two autonomous agents transacting over MCP with
+ * x402 payments (mock rail in dev):
  *
  *   Terminal 1: npm run dev
  *   Terminal 2: npm run demo
  *
- * buyer agent purchases → escrow held → seller agent delivers with receipts
- * → stub judge panel verifies → funds settle to seller minus 10% fee.
+ * seller lists a service → buyer discovers it, pays the 402, escrow holds →
+ * seller delivers with receipts → machine checks + judge panel verify →
+ * settlement pays the seller's wallet minus the 10% fee.
  */
+import { connectAgent, mockPaymentPayload, performService, SEED_LISTINGS, tool } from '../src/agents/reference';
 
 const BASE = process.env.CLEARING_URL ?? 'http://localhost:3000';
 const APP_SECRET = process.env.APP_SECRET ?? 'dev-secret';
 
-interface Json {
-  [key: string]: unknown;
-}
-
-async function call(
-  method: string,
-  path: string,
-  opts: { body?: unknown; key?: string; appSecret?: boolean } = {},
-): Promise<Json> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: {
-      'content-type': 'application/json',
-      ...(opts.key ? { authorization: `Bearer ${opts.key}` } : {}),
-      ...(opts.appSecret ? { 'x-app-secret': APP_SECRET } : {}),
-    },
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-  });
-  const data = (await res.json()) as Json;
-  if (!res.ok) {
-    throw new Error(`${method} ${path} → ${res.status}: ${JSON.stringify(data)}`);
-  }
-  return data;
-}
-
-function log(step: string, detail: unknown): void {
+function log(step: string, detail?: unknown): void {
   console.log(`\n▸ ${step}`);
-  console.log(`  ${JSON.stringify(detail)}`);
+  if (detail !== undefined) console.log(`  ${JSON.stringify(detail)}`);
 }
 
 async function main(): Promise<void> {
-  console.log(`Clearing Phase 1 demo against ${BASE}`);
+  console.log(`Clearing demo against ${BASE} (wallet identity + x402 payments)`);
 
-  const account = await call('POST', '/api/accounts', {
-    body: { email: `demo-${Date.now()}@clearing.dev` },
-  });
-  log('created human account', { id: account.id });
-
-  const seller = await call('POST', '/api/agents', {
-    body: { account_id: account.id, name: 'summarizer-agent', capabilities: ['seller'] },
-  });
-  const buyer = await call('POST', '/api/agents', {
-    body: { account_id: account.id, name: 'research-agent', capabilities: ['buyer'] },
-  });
-  log('created agents', { seller: seller.id, buyer: buyer.id });
-
-  await call('POST', '/api/dev/topup', {
-    body: { agent_id: buyer.id, amount_credits: 10_000 },
-    appSecret: true,
-  });
-  log('buyer topped up (dev credits — Stripe lands in Phase 3)', {
-    balance: (await call('GET', '/api/agents/me/balance', { key: buyer.api_key as string }))
-      .balance_credits,
+  const seller = await connectAgent({ baseUrl: BASE, name: 'demo-seller' });
+  const buyer = await connectAgent({ baseUrl: BASE, name: 'demo-buyer' });
+  log('agents online via wallet-signature login', {
+    seller: seller.wallet,
+    buyer: buyer.wallet,
   });
 
-  const listing = await call('POST', '/api/listings', {
-    key: seller.api_key as string,
-    body: {
-      title: 'Summarize a document with citations',
-      description: 'Returns a faithful summary; every claim cites a section.',
-      price_credits: 1000,
-      turnaround_seconds: 3600,
-      acceptance_criteria: {
-        criteria: [
-          {
-            id: 'c1',
-            type: 'schema',
-            spec: { json_schema: { type: 'object', required: ['summary', 'citations'] } },
-          },
-          {
-            id: 'c2',
-            type: 'judged',
-            spec: { requirement: 'Summary covers all sections of the input document' },
-          },
-        ],
-        pass_rule: 'all',
-      },
-    },
-  });
-  log('seller published listing', { id: listing.id });
+  const listingSpec = SEED_LISTINGS[0]; // JSON → CSV (fully machine-verifiable)
+  const created = await tool<{ id: string }>(seller, 'create_listing', listingSpec as never);
+  log('seller published listing', { id: created.id, title: listingSpec.title });
 
-  const order = await call('POST', '/api/orders', {
-    key: buyer.api_key as string,
-    body: {
-      listing_id: listing.id,
-      input_payload: { document: 'Q3 report: revenue up 12%… (three sections)' },
-    },
+  const quote = await tool<{ order_id: string; accepts: unknown[] }>(buyer, 'create_order', {
+    listing_id: created.id,
+    input_payload: { rows: [{ city: 'Zürich', pop: 415367 }, { city: 'Basel', pop: 178120 }] },
   });
-  log('buyer purchased — credits held in escrow', {
-    order: order.id,
-    state: order.state,
-    buyer_balance: (
-      await call('GET', '/api/agents/me/balance', { key: buyer.api_key as string })
-    ).balance_credits,
+  log('order intent → HTTP 402 with x402 payment requirements', {
+    order: quote.order_id,
+    requirements: quote.accepts?.[0],
   });
 
-  const delivery = await call('POST', `/api/orders/${order.id}/delivery`, {
-    key: seller.api_key as string,
-    body: {
-      artifacts: [{ inline: { summary: 'Revenue rose 12%…', citations: ['§1', '§2', '§3'] } }],
-      receipts: [
-        { step: 'parsed input document', at: new Date().toISOString() },
-        { step: 'generated summary + citations', at: new Date().toISOString() },
-      ],
-    },
+  await fetch(`${BASE}/api/dev/fund`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-app-secret': APP_SECRET },
+    body: JSON.stringify({ wallet_address: buyer.wallet, amount_credits: listingSpec.price_credits }),
   });
-  log('seller delivered; judge panel verdict', { verdict: delivery.verdict });
+  const paid = await tool<{ state: string; tx_hash: string }>(buyer, 'pay_order', {
+    order_id: quote.order_id,
+    payment_payload: mockPaymentPayload(buyer.wallet),
+  });
+  log('buyer paid — USDC in escrow', { state: paid.state, tx_hash: paid.tx_hash });
 
-  const settled = await call('GET', `/api/orders/${order.id}`, {
-    key: buyer.api_key as string,
+  const detail = await tool<{ input_payload: Record<string, unknown> }>(seller, 'get_order', {
+    id: quote.order_id,
   });
+  const { artifact, receipts } = performService(listingSpec.title, detail.input_payload);
+  const delivery = await tool<{ verdict: string }>(seller, 'submit_delivery', {
+    order_id: quote.order_id,
+    artifacts: [{ inline: artifact }],
+    receipts,
+  });
+  log('seller delivered; machine checks + judge panel verdict', { verdict: delivery.verdict });
+
+  const settled = await tool<{ state: string; settled_at: string; verification: unknown }>(
+    buyer,
+    'get_order',
+    { id: quote.order_id },
+  );
   log('order settled', {
     state: settled.state,
     settled_at: settled.settled_at,
     verification: settled.verification,
   });
 
-  const sellerBalance = await call('GET', '/api/agents/me/balance', {
-    key: seller.api_key as string,
+  const sellerLedger = await tool<{ balance_credits: number; entries: Array<{ entry_type: string; amount: number; tx_hash?: string }> }>(
+    seller,
+    'get_balance',
+  );
+  const payout = (sellerLedger.entries ?? []).find((e) => e.entry_type === 'withdrawal');
+  log('seller ledger (earnings auto-paid to wallet)', {
+    remaining_credits: sellerLedger.balance_credits,
+    payout,
   });
-  const buyerBalance = await call('GET', '/api/agents/me/balance', {
-    key: buyer.api_key as string,
-  });
-  const reputation = await call('GET', `/api/agents/${seller.id}/reputation`);
-  log('final balances (1000 escrowed → 900 to seller, 100 platform fee)', {
-    seller: sellerBalance.balance_credits,
-    buyer: buyerBalance.balance_credits,
-  });
-  log('seller reputation after settlement', reputation);
 
-  console.log('\n✅ Core loop complete: purchase → escrow → deliver → verify → settle.');
+  const rep = await tool(seller, 'get_reputation', {
+    agent_id: (await tool<{ agent_id: string }>(seller, 'get_balance')).agent_id,
+  });
+  log('seller reputation after settlement', rep);
+
+  const evidence = await tool<{ ledger_entries: unknown[] }>(buyer, 'get_evidence_pack', {
+    order_id: quote.order_id,
+  });
+  log('evidence pack exported', {
+    ledger_entries: (evidence.ledger_entries ?? []).length,
+  });
+
+  await Promise.all([seller.close(), buyer.close()]);
+  console.log(
+    '\n✅ Core loop complete: 402 → escrow → deliver → verify → settle → on-chain payout.',
+  );
 }
 
 main().catch((e) => {

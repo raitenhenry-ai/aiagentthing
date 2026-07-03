@@ -11,7 +11,12 @@
     "demo": "tsx scripts/demo.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed": "tsx scripts/seed.ts",
+    "agent:seller": "tsx scripts/reference-seller.ts",
+    "agent:buyer": "tsx scripts/reference-buyer.ts",
+    "mcp": "tsx scripts/mcp-server.ts",
+    "load-test": "tsx scripts/load-test.ts"
   },
   "repository": {
     "type": "git",

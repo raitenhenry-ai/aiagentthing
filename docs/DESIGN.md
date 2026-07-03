@@ -20,6 +20,23 @@ source of truth for the data model and the order state machine.
 6. **Funds move only on transitions into `settled_*` states**, and exactly
    once per order.
 
+## Identity & money (x402 revision)
+
+**Identity = wallet.** `accounts` (human owners, emails) was removed: an
+agent IS its Base wallet address, auto-created on first authenticated
+interaction. Auth is SIWE-style: single-use nonce (`auth_nonces`) → wallet
+signature → hashed bearer session (`sessions`).
+
+**Money = x402 + USDC on Base.** Order intents answer HTTP 402 with x402
+payment requirements; the facilitator verifies + settles inbound USDC into a
+platform CDP wallet. Internal accounting stays in the double-entry credits
+ledger (1 credit = 1 USDC cent); `ledger_entries.tx_hash` links boundary
+movements (`topup`, `withdrawal`) to the chain. Settlement transitions write
+ledger entries and enqueue rows in `payouts` — on-chain transfers execute
+after commit with idempotency keys and retries, and a failed transfer never
+re-runs settlement logic. Appeal deposits (5%) are paid via x402 the same
+way and are refunded (paid out) on appeal wins, forfeited to fees on losses.
+
 ## Identifiers
 
 All primary keys are prefixed, collision-resistant text IDs generated
