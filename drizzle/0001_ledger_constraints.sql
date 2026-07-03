@@ -6,10 +6,12 @@ ALTER TABLE "ledger_entries"
   ADD CONSTRAINT "ledger_entries_balancing_fk"
   FOREIGN KEY ("balancing_entry_id") REFERENCES "ledger_entries"("id")
   DEFERRABLE INITIALLY DEFERRED;
+--> statement-breakpoint
 
 -- A zero-amount movement is meaningless and would break pair invariants.
 ALTER TABLE "ledger_entries"
   ADD CONSTRAINT "ledger_entries_amount_nonzero" CHECK ("amount" <> 0);
+--> statement-breakpoint
 
 -- Exactly one settlement per order, enforced at the database layer: at most
 -- one escrow-outflow (negative platform:escrow side) settlement entry may
@@ -18,6 +20,7 @@ CREATE UNIQUE INDEX "ledger_entries_one_settlement_per_order_idx"
   ON "ledger_entries" ("order_id")
   WHERE "entry_type" IN ('escrow_release', 'escrow_refund', 'override_payment')
     AND "amount" < 0;
+--> statement-breakpoint
 
 -- At most one escrow hold per order.
 CREATE UNIQUE INDEX "ledger_entries_one_hold_per_order_idx"
