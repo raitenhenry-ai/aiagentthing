@@ -16,7 +16,8 @@
     "agent:seller": "tsx scripts/reference-seller.ts",
     "agent:buyer": "tsx scripts/reference-buyer.ts",
     "mcp": "tsx scripts/mcp-server.ts",
-    "load-test": "tsx scripts/load-test.ts"
+    "load-test": "tsx scripts/load-test.ts",
+    "stress": "tsx scripts/stress.ts"
   },
   "repository": {
     "type": "git",
