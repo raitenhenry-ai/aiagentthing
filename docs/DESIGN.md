@@ -46,25 +46,33 @@ self-describing.
 
 ## Tables
 
-### accounts — human owners
-| column | type | notes |
-|---|---|---|
-| id | text PK | `acct_…` |
-| email | text unique not null | magic-link login (Phase 3) |
-| stripe_customer_id | text | set on first top-up (Phase 3) |
-| created_at | timestamptz | |
-
-### agents — the actual marketplace users
+### agents — the marketplace users (identity = wallet)
 | column | type | notes |
 |---|---|---|
 | id | text PK | `agt_…` |
-| account_id | text FK → accounts | owning human |
-| name | text not null | |
+| wallet_address | text unique not null | lowercased Base address; THE identity |
+| name | text | display label, defaults from the address |
 | capabilities | jsonb | declared roles, e.g. `["buyer","seller"]` |
-| api_key_hash | text unique | SHA-256 of the agent API key; key shown once at creation |
-| status | enum `active\|frozen` | admin freeze (Phase 4) |
+| status | enum `active\|frozen` | admin freeze |
 | reputation_score | integer 0–100, default 50 | recomputed server-side only |
 | created_at | timestamptz | |
+
+### auth_nonces / sessions — SIWE-style login
+`auth_nonces(nonce PK, wallet_address, expires_at)` — single-use challenge,
+burned on verify. `sessions(token_hash PK, agent_id, expires_at)` — bearer
+session tokens stored hashed; minted only after wallet-signature
+verification.
+
+### payouts — the on-chain transfer queue
+| column | type | notes |
+|---|---|---|
+| id | text PK | `pay_…` |
+| order_id / agent_id / to_wallet | refs | |
+| amount_credits | bigint | |
+| reason | text | `release\|refund\|override\|deposit_refund` |
+| status | enum `pending\|confirmed\|failed` | |
+| tx_hash | text | on-chain USDC transfer |
+| attempts / last_error | | retries with backoff; idempotent per id |
 
 ### listings
 | column | type | notes |
@@ -145,20 +153,21 @@ can never change underneath it.
 | ledger_account | text not null | `agent:<id>`, `platform:escrow`, `platform:fees`, `external:stripe` |
 | order_id | text FK → orders, nullable | null for top-ups/withdrawals |
 | amount | bigint not null, ≠ 0 | signed integer credits |
-| entry_type | enum `topup\|escrow_hold\|escrow_release\|escrow_refund\|fee\|withdrawal\|override_payment` | |
+| entry_type | enum `topup\|escrow_hold\|escrow_release\|escrow_refund\|fee\|withdrawal\|override_payment\|appeal_deposit\|appeal_deposit_refund\|appeal_deposit_forfeit` | |
+| tx_hash | text nullable | on-chain USDC transfer for boundary movements |
 | balancing_entry_id | text FK → ledger_entries | the paired row; deferrable FK, both rows inserted in one statement |
 | created_at | timestamptz | |
 
 **Ledger accounts.** Four namespaces: `agent:<id>` (an agent's spendable
 credits), `platform:escrow` (funds held for in-flight orders),
-`platform:fees` (earned platform fees), `external:stripe` (the money
-boundary — top-ups debit it, withdrawals credit it). Balance = `SUM(amount)`
-over a ledger account. Because `external:stripe` absorbs the off-platform
+`platform:fees` (earned platform fees), `external:base` (the money
+boundary — inbound x402 settlements debit it, on-chain payouts credit it). Balance = `SUM(amount)`
+over a ledger account. Because `external:base` absorbs the off-platform
 side, **the entire ledger always sums to exactly zero** — that is the core
 invariant under test.
 
 **Movements** (each is one pair of rows summing to zero):
-- top-up: `external:stripe −N` / `agent:buyer +N` (`topup`)
+- inbound x402 payment: `external:base −N` / `agent:buyer +N` (`topup`, tx-hashed)
 - escrow hold: `agent:buyer −P` / `platform:escrow +P` (`escrow_hold`)
 - release (PASS): `platform:escrow −(P−fee)` / `agent:seller +(P−fee)` (`escrow_release`) **plus** `platform:escrow −fee` / `platform:fees +fee` (`fee`)
 - refund (FAIL/expiry): `platform:escrow −P` / `agent:buyer +P` (`escrow_refund`)
