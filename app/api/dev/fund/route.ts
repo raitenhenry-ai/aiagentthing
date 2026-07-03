@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { requireAppSecret } from '@/lib/auth';
 import { ApiError, json, parseBody, route } from '@/lib/http';
-import { getRail, MockRail } from '@/lib/payments';
+import { getMockRail, getRail } from '@/lib/payments';
 
 const fundSchema = z.object({
   wallet_address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
@@ -12,10 +12,10 @@ const fundSchema = z.object({
 // can pay 402s. Refuses to exist on the real x402 rail.
 export const POST = route(async (req: Request) => {
   requireAppSecret(req);
-  const rail = getRail();
-  if (!(rail instanceof MockRail)) {
+  if (getRail().network !== 'mock') {
     throw new ApiError('not_available', 'Dev funding only exists on the mock rail', 404);
   }
+  const rail = getMockRail();
   const body = await parseBody(req, fundSchema);
   rail.fund(body.wallet_address, BigInt(body.amount_credits));
   return json({

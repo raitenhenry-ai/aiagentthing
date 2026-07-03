@@ -7,7 +7,10 @@ import * as schema from './schema';
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
-let dbPromise: Promise<Db> | undefined;
+// Next.js dev compiles routes into separate bundles that each evaluate this
+// module — pin the singleton on globalThis so every bundle shares one client
+// (PGlite is single-connection; two copies would fight over the data dir).
+const globalStore = globalThis as { __clearingDb?: Promise<Db> };
 
 async function createDb(): Promise<Db> {
   const url = process.env.DATABASE_URL;
@@ -39,8 +42,8 @@ async function createDb(): Promise<Db> {
 }
 
 export function getDb(): Promise<Db> {
-  if (!dbPromise) dbPromise = createDb();
-  return dbPromise;
+  if (!globalStore.__clearingDb) globalStore.__clearingDb = createDb();
+  return globalStore.__clearingDb;
 }
 
 /** Test helper: fresh, isolated in-memory database with migrations applied. */

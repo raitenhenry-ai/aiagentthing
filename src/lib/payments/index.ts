@@ -4,7 +4,8 @@ import type { PaymentRail } from './rail';
 export * from './rail';
 export { MockRail } from './mock-rail';
 
-let rail: PaymentRail | undefined;
+// Shared across all Next dev route bundles (see db/client.ts note).
+const globalStore = globalThis as { __clearingRail?: PaymentRail };
 
 /**
  * The active payment rail. x402 + CDP when PAYMENTS_MODE=x402 (requires CDP
@@ -13,21 +14,23 @@ let rail: PaymentRail | undefined;
  * balances.
  */
 export function getRail(): PaymentRail {
-  if (!rail) {
+  if (!globalStore.__clearingRail) {
     if (process.env.PAYMENTS_MODE === 'x402') {
       // Lazy import keeps CDP/x402 out of the bundle unless configured.
       const { X402Rail } = require('./x402-rail') as typeof import('./x402-rail');
-      rail = new X402Rail();
+      globalStore.__clearingRail = new X402Rail();
     } else {
-      rail = new MockRail();
+      globalStore.__clearingRail = new MockRail();
     }
   }
-  return rail;
+  return globalStore.__clearingRail;
 }
 
-/** Test/demo helper: the mock rail instance (throws if running on x402). */
+/** Test/demo helper: the mock rail instance (throws if running on x402).
+ * Duck-typed rather than instanceof — Next dev bundles can duplicate the
+ * class while the instance lives on globalThis. */
 export function getMockRail(): MockRail {
   const r = getRail();
-  if (!(r instanceof MockRail)) throw new Error('Not running on the mock rail');
-  return r;
+  if (r.network !== 'mock') throw new Error('Not running on the mock rail');
+  return r as MockRail;
 }
