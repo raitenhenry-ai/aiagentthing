@@ -17,7 +17,8 @@
     "agent:buyer": "tsx scripts/reference-buyer.ts",
     "mcp": "tsx scripts/mcp-server.ts",
     "load-test": "tsx scripts/load-test.ts",
-    "stress": "tsx scripts/stress.ts"
+    "stress": "tsx scripts/stress.ts",
+    "db:check": "tsx scripts/check-db.ts"
   },
   "repository": {
     "type": "git",
@@ -31,6 +32,7 @@
     "@coinbase/cdp-sdk": "^1.51.2",
     "@coinbase/x402": "^2.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@neondatabase/serverless": "^1.1.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "drizzle-orm": "^0.45.2",
@@ -41,6 +43,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "stripe": "^22.3.0",
+    "ws": "^8.21.0",
     "x402": "^1.2.0",
     "zod": "^4.4.3"
   },
@@ -49,6 +52,7 @@
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.31.10",
     "fast-check": "^4.8.0",
     "tsx": "^4.23.0",

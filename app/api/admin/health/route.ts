@@ -36,11 +36,16 @@ export const GET = route(async (req: Request) => {
     ]);
 
   // Unbalanced entries: any ledger row whose pair doesn't negate it.
-  const unbalanced = await db.execute(sql`
+  // (Drivers disagree on execute() shape: postgres-js returns the row array,
+  // neon/pglite wrap it in {rows} — normalize.)
+  const unbalancedResult = await db.execute(sql`
     SELECT COUNT(*) AS n FROM ledger_entries a
     JOIN ledger_entries b ON a.balancing_entry_id = b.id
     WHERE a.amount + b.amount <> 0
   `);
+  const unbalancedRows = Array.isArray(unbalancedResult)
+    ? (unbalancedResult as Array<{ n: string }>)
+    : ((unbalancedResult as unknown as { rows?: Array<{ n: string }> }).rows ?? []);
 
   return json({
     ok: sum === 0n,
@@ -50,7 +55,7 @@ export const GET = route(async (req: Request) => {
       fees_earned: fees,
       pending_payout_reserve: pending,
       entry_count: Number(ledgerCount[0]?.n ?? 0),
-      unbalanced_pairs: Number((unbalanced as unknown as { rows: Array<{ n: string }> }).rows?.[0]?.n ?? 0),
+      unbalanced_pairs: Number(unbalancedRows[0]?.n ?? 0),
     },
     orders: Object.fromEntries(stateCounts.map((r) => [r.state, Number(r.n)])),
     payouts: {
