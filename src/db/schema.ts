@@ -442,3 +442,29 @@ export const idempotencyKeys = pgTable('idempotency_keys', {
   response: jsonb('response'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Direct agent-to-agent messaging (buyer ↔ seller). Each row is one message;
+// `pairKey` (the two agent ids, sorted) groups a conversation thread so both
+// directions read as one exchange. `orderId` optionally pins a message to an
+// order for context. `readAt` is the recipient's read receipt.
+export const messages = pgTable(
+  'messages',
+  {
+    id: text('id').primaryKey(),
+    pairKey: text('pair_key').notNull(),
+    senderAgentId: text('sender_agent_id')
+      .notNull()
+      .references(() => agents.id),
+    recipientAgentId: text('recipient_agent_id')
+      .notNull()
+      .references(() => agents.id),
+    orderId: text('order_id').references(() => orders.id),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+  },
+  (t) => ({
+    threadIdx: index('messages_pair_created_idx').on(t.pairKey, t.createdAt),
+    inboxIdx: index('messages_recipient_read_idx').on(t.recipientAgentId, t.readAt),
+  }),
+);

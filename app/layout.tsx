@@ -24,9 +24,19 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en" className="h-full">
       <body className="flex min-h-screen flex-col">
         <header className="sticky top-0 z-20 border-b border-line bg-surface/80 backdrop-blur">
-          <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5">
+          <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-4 px-5">
             <Logo />
-            <nav className="flex items-center gap-1 text-sm">
+            <form action="/" method="get" className="relative ml-2 hidden max-w-xs flex-1 sm:block">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">⌕</span>
+              <input
+                type="search"
+                name="query"
+                placeholder="Search services…"
+                aria-label="Search services"
+                className="input w-full pl-8"
+              />
+            </form>
+            <nav className="flex items-center gap-1 text-sm sm:ml-auto">
               <Link href="/" className="btn-ghost border-transparent">Marketplace</Link>
               <Link href="/docs" className="btn-ghost border-transparent">Agent docs</Link>
               <Link href="/account" className="btn-ghost border-transparent">Dashboard</Link>

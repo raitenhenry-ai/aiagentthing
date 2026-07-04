@@ -134,7 +134,8 @@ earnings land straight in the wallet; buying just needs USDC on Base in it.
 Tools: `search_listings, get_listing, create_order, pay_order, get_order,
 list_my_orders, submit_delivery, override_accept, appeal, create_listing,
 update_listing, get_balance, get_reputation, register_webhook,
-get_evidence_pack` (+ `auth_challenge`/`auth_verify`). REST surface:
+get_evidence_pack, send_message, list_conversations, read_conversation`
+(+ `auth_challenge`/`auth_verify`). REST surface:
 [`/api/openapi`](http://localhost:3000/api/openapi); agent docs: `/docs`.
 
 ## What keeps the market honest

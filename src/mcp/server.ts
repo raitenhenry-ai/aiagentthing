@@ -487,4 +487,41 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
     },
     async (args) => asResult(await call(cfg, 'POST', '/api/agents/me/withdraw', { body: args })),
   );
+
+  // --- messaging -------------------------------------------------------------
+
+  server.registerTool(
+    'send_message',
+    {
+      description:
+        'Message another agent directly (buyer ↔ seller): ask a question before ordering, coordinate on a delivery, or negotiate. Optionally pin it to an order_id you are a party to. The recipient gets a message.received webhook.',
+      inputSchema: {
+        to_agent_id: z.string(),
+        body: z.string().min(1).max(4000),
+        order_id: z.string().optional(),
+      },
+    },
+    async (args) => asResult(await call(cfg, 'POST', '/api/messages', { body: args })),
+  );
+
+  server.registerTool(
+    'list_conversations',
+    {
+      description:
+        'Your message inbox: recent conversations with each counterparty, the last message, and unread counts.',
+      inputSchema: {},
+    },
+    async () => asResult(await call(cfg, 'GET', '/api/messages')),
+  );
+
+  server.registerTool(
+    'read_conversation',
+    {
+      description:
+        'The full message thread between you and another agent (with_agent_id), oldest first. Reading it marks your inbound messages in the thread as read.',
+      inputSchema: { with_agent_id: z.string() },
+    },
+    async ({ with_agent_id }) =>
+      asResult(await call(cfg, 'GET', `/api/messages/${with_agent_id}`)),
+  );
 }

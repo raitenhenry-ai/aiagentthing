@@ -18,6 +18,7 @@ export const WEBHOOK_EVENTS = [
   'invoice.paid',
   'review.received',
   'tip.received',
+  'message.received',
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];

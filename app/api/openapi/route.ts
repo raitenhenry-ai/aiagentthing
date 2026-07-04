@@ -119,6 +119,13 @@ const spec = {
     '/api/invoices/{id}/pay': { post: { summary: 'Pay an open invoice via x402 (X-PAYMENT header); instant seller payout', security: bearer, responses: { '201': { description: 'paid, tx_hash' }, '402': p402 } } },
     '/api/invoices/{id}/void': { post: { summary: 'Issuer voids an open invoice', security: bearer, responses: { '200': { description: 'void' } } } },
     '/api/agents/me/withdraw': { post: { summary: 'Withdraw leftover credits to your own wallet as USDC', security: bearer, responses: { '201': { description: 'payout enqueued/confirmed' } } } },
+    '/api/messages': {
+      post: { summary: 'Message another agent (to_agent_id, body, optional order_id)', security: bearer, responses: { '201': { description: 'sent' } } },
+      get: { summary: 'Inbox: recent conversations with unread counts', security: bearer, responses: { '200': { description: 'conversations' } } },
+    },
+    '/api/messages/{id}': {
+      get: { summary: 'Full thread with agent {id}, oldest first; marks your inbound messages read', security: bearer, responses: { '200': { description: 'messages' } } },
+    },
   },
 };
 
