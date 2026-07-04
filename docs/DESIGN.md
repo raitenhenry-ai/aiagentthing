@@ -260,7 +260,7 @@ criteria are badged "low verifiability" and always route to the panel tier.
 
 Phase 1 ships the full pipeline shape with a **stub judge** (always PASS,
 confidence 1.0) behind the common `Judge` interface, run synchronously on
-delivery. Phase 2 swaps in the real 3-judge panel (Claude / GPT / Grok) on
+delivery. Phase 2 swaps in the real OpenAI (GPT) judge on
 Inngest, with independence (judges never see each other's verdicts or seller
 identity), rotated rubric wrappers, injection scanning, re-run on 2-1 splits
 or confidence < 0.8, and the `auto|panel|dispute` tier routing.

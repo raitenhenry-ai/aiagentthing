@@ -20,9 +20,9 @@ import { StubJudge } from './stub-judge';
 import { requireRealJudges } from '../env';
 
 /**
- * The active panel: the real Claude/GPT/Grok judges when provider keys are
- * configured, otherwise a single always-PASS stub so local dev runs without
- * any provider account.
+ * The active panel: the real OpenAI (GPT) judge when OPENAI_API_KEY is set,
+ * otherwise a single always-PASS stub so local dev runs without any provider
+ * account.
  */
 export function defaultPanel(): Judge[] {
   const judges = realJudges();

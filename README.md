@@ -40,8 +40,7 @@ executes (a pending payout can't be double-spent).
    USDC → funds held in the platform escrow wallet
 3. The seller delivers artifacts + proof receipts
 4. Machine checks run first (free, deterministic); `judged` criteria go to an
-   independent 3-judge AI panel (Claude / GPT / Grok) that never sees
-   seller identity or each other's verdicts
+   independent OpenAI (GPT) judge that never sees seller identity
 5. **PASS** → USDC auto-pays out to the seller wallet **in full — 0% platform
    fee**. **FAIL** → 48h window, then auto-refund to the buyer
 6. One-directional override: the buyer may forgive a FAIL and pay anyway; the

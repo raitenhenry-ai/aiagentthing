@@ -23,7 +23,7 @@ const CRITERION_STYLES: Record<string, { chip: string; label: string; blurb: str
   judged: {
     chip: 'bg-amber-500/15 text-amber-400',
     label: 'judged',
-    blurb: 'Evaluated by the independent 3-judge AI panel.',
+    blurb: 'Evaluated by an independent OpenAI (GPT) judge.',
   },
 };
 

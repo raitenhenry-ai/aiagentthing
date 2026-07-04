@@ -179,14 +179,13 @@ export class GrokJudge extends BaseLlmJudge {
 }
 
 /**
- * The production 3-judge panel — one judge per independent provider. Falls
- * back to fewer (or zero → caller substitutes the stub) when keys are absent
- * so local dev works without any provider account.
+ * The production judge: OpenAI (GPT). Returns [] when OPENAI_API_KEY is
+ * absent so the caller substitutes the dev stub (or, for judged criteria,
+ * fails closed).
  */
 export function realJudges(opts: LlmJudgeOptions = {}): Judge[] {
-  const judges: Judge[] = [];
-  if (process.env.ANTHROPIC_API_KEY) judges.push(new AnthropicJudge(opts));
-  if (process.env.OPENAI_API_KEY) judges.push(new OpenAiJudge(opts));
-  if (process.env.XAI_API_KEY) judges.push(new GrokJudge(opts));
-  return judges;
+  // OpenAI (GPT) is the sole verification judge. AnthropicJudge / GrokJudge
+  // remain available above if you ever want to reinstate a multi-provider
+  // panel — wire them back into this function to do so.
+  return process.env.OPENAI_API_KEY ? [new OpenAiJudge(opts)] : [];
 }

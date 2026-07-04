@@ -7,7 +7,8 @@ import { feeFor } from './ledger';
 import { newId } from './ids';
 import { transitionOrder } from './state-machine';
 import type { Judge, Verdict } from './verification/judge';
-import { AnthropicJudge, GrokJudge, OpenAiJudge } from './verification/llm-judge';
+import { OpenAiJudge } from './verification/llm-judge';
+import { rubricWrapperCount } from './verification/prompts';
 import { judgeMaterials, loadOrderMaterials } from './verification/run';
 import { StubJudge } from './verification/stub-judge';
 
@@ -18,18 +19,14 @@ import { StubJudge } from './verification/stub-judge';
  * stubs when no provider keys are configured (local dev).
  */
 export function appealPanel(): Judge[] {
-  const judges: Judge[] = [];
-  if (process.env.ANTHROPIC_API_KEY) {
-    judges.push(new AnthropicJudge({ wrapperIndex: 0 }), new AnthropicJudge({ wrapperIndex: 1 }));
-  }
-  if (process.env.OPENAI_API_KEY) {
-    judges.push(new OpenAiJudge({ wrapperIndex: 2 }), new OpenAiJudge({ wrapperIndex: 0 }));
-  }
-  if (process.env.XAI_API_KEY) judges.push(new GrokJudge({ wrapperIndex: 1 }));
-  if (judges.length === 0) {
+  if (!process.env.OPENAI_API_KEY) {
     return Array.from({ length: 5 }, (_, i) => new StubJudge({ model: `stub-appeal-${i}` }));
   }
-  return judges.slice(0, 5);
+  // A fresh 5-seat OpenAI panel: each seat gets a rotated rubric wrapper and
+  // independent sampling, so the re-judge is a real majority vote across
+  // varied prompts rather than one deterministic call. Majority is final.
+  const wrappers = rubricWrapperCount();
+  return Array.from({ length: 5 }, (_, i) => new OpenAiJudge({ wrapperIndex: i % wrappers }));
 }
 
 /** The x402 deposit quote for appealing an order's FAIL verdict. */

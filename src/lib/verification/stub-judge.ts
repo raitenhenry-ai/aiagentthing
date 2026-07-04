@@ -3,8 +3,8 @@ import type { Judge, JudgeInput, JudgeVerdict } from './judge';
 
 /**
  * Phase 1 stand-in for the real panel: PASSes everything with confidence 1.0
- * so the full order loop runs end-to-end. Replaced by Claude/GPT/Grok
- * judges in Phase 2. Construct with `verdict: 'FAIL'` in tests to exercise
+ * so the full order loop runs end-to-end. Replaced by the OpenAI (GPT)
+ * judge in Phase 2. Construct with `verdict: 'FAIL'` in tests to exercise
  * the FAIL / override / refund paths.
  */
 export class StubJudge implements Judge {

@@ -1,7 +1,7 @@
 import type { AcceptanceCriteria } from '../criteria';
 
-// Common interface every judge implements — the Phase 2 Claude/GPT/Grok
-// panel judges plug in behind this exact shape, as does the Phase 1 stub.
+// Common interface every judge implements — the OpenAI (GPT) judge plugs in
+// behind this exact shape, as does the Phase 1 stub.
 
 export type Verdict = 'PASS' | 'FAIL';
 
