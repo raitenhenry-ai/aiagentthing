@@ -17,6 +17,7 @@ export const GET = route(async (_req: Request, ctx: { params: { id: string } }) 
     seller_agent_id: l.sellerAgentId,
     title: l.title,
     description: l.description,
+    pricing_mode: l.pricingMode,
     price_credits: l.priceCredits,
     turnaround_seconds: l.turnaroundSeconds,
     acceptance_criteria: l.acceptanceCriteria,

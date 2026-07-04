@@ -17,6 +17,7 @@ import {
 } from './judge';
 import { realJudges } from './llm-judge';
 import { StubJudge } from './stub-judge';
+import { requireRealJudges } from '../env';
 
 /**
  * The active panel: the real Claude/GPT/Grok judges when provider keys are
@@ -34,6 +35,9 @@ export interface VerificationRecord {
   injection: InjectionScan;
   low_verifiability: boolean;
   short_circuited: boolean;
+  /** True when judged criteria could not be evaluated because no real judge
+   * was configured — the order failed closed to protect the buyer. */
+  no_judge_configured?: boolean;
 }
 
 interface OrderMaterials {
@@ -245,6 +249,50 @@ export async function judgeMaterials(
 }
 
 /**
+ * Fail-closed outcome for an order whose acceptance criteria include a
+ * `judged` requirement when no real judge provider is configured. The
+ * always-PASS dev stub must not settle real money, so we run the machine
+ * criteria for the record, mark the judged criteria unverified (FAIL), and
+ * route to `dispute` tier — funds stay in escrow for the buyer (who may still
+ * `override_accept` to pay) instead of auto-releasing to the seller.
+ */
+async function unverifiedJudgedOutcome(materials: OrderMaterials): Promise<PanelOutcome> {
+  const payload = primaryPayload(materials.artifacts);
+  const checkCtx = {
+    payload,
+    artifacts: materials.artifacts,
+    receipts: materials.receipts,
+    inputPayload: materials.inputPayload,
+  };
+  const injection = scanForInjection([materials.artifacts, materials.receipts]);
+  const machineCriteria = materials.criteria.criteria.filter((c) => c.type !== 'judged');
+  const judgedCriteria = materials.criteria.criteria.filter((c) => c.type === 'judged');
+  const machineResults: CheckResult[] = [];
+  for (const criterion of machineCriteria) {
+    machineResults.push(await runMachineCriterion(criterion, checkCtx));
+  }
+  const judgedResults: CriterionResult[] = judgedCriteria.map((c) => ({
+    criterionId: c.id,
+    verdict: 'FAIL',
+    confidence: 0,
+  }));
+  return {
+    verdict: 'FAIL',
+    confidence: 0,
+    tier: 'dispute',
+    criteriaResults: [...machineResults, ...judgedResults],
+    record: {
+      machine_results: machineResults,
+      runs: [],
+      injection,
+      low_verifiability: isLowVerifiability(materials.criteria),
+      short_circuited: false,
+      no_judge_configured: true,
+    },
+  };
+}
+
+/**
  * Full verification for a delivered order: delivered → verifying → panel →
  * passed/failed, and on PASS straight through to settlement. Phase 1 ran the
  * stub synchronously; Phase 2 keeps the same entry point and adds the real
@@ -253,8 +301,13 @@ export async function judgeMaterials(
 export async function runVerification(
   db: Db,
   orderId: string,
-  panel: Judge[] = defaultPanel(),
+  panel?: Judge[],
 ): Promise<{ verdict: Verdict; verificationId: string }> {
+  // An explicit panel (tests, or a deployment injecting real judges) is
+  // trusted as given. Only the default fallback can degrade to the stub, and
+  // only that path is guarded below.
+  const usingDefaultPanel = panel === undefined;
+  const activePanel = panel ?? defaultPanel();
   // Idempotent entry: safe to retry after judge/provider failures. An order
   // already past verification returns its recorded verdict; one stuck in
   // `verifying` (a crashed prior run) resumes without a state transition.
@@ -278,7 +331,24 @@ export async function runVerification(
     await transitionOrder(db, { orderId, to: 'verifying', actor: 'system' });
   }
   const materials = await loadOrderMaterials(db, orderId);
-  const outcome = await judgeMaterials(materials, panel);
+  const hasJudged = materials.criteria.criteria.some((c) => c.type === 'judged');
+  const panelIsAuthoritative = activePanel.some((j) => j.authoritative !== false);
+
+  // Fail closed: on the default panel, if judged criteria are present but no
+  // real judge is configured (only the always-PASS stub), do NOT settle. An
+  // explicitly-passed panel (tests, injected real judges) is trusted as given.
+  const outcome =
+    usingDefaultPanel && hasJudged && !panelIsAuthoritative && requireRealJudges()
+      ? await unverifiedJudgedOutcome(materials)
+      : await judgeMaterials(materials, activePanel);
+  if (outcome.record.no_judge_configured) {
+    console.warn(
+      `[verification] order ${orderId}: judged criteria present but no real judge configured — ` +
+        `failing closed, funds held for the buyer. Configure a judge provider key ` +
+        `(ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY), or set REQUIRE_REAL_JUDGES=false ` +
+        `to allow the dev stub to auto-pass.`,
+    );
+  }
 
   const verificationId = newId('vrf');
   await db.insert(verifications).values({

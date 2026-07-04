@@ -35,6 +35,12 @@ export interface JudgeVerdict {
 
 export interface Judge {
   readonly model: string;
+  /**
+   * Whether this judge's verdict is trustworthy enough to auto-settle real
+   * money. Real provider judges are authoritative; the always-PASS dev stub
+   * is not. Absent → treated as authoritative (real judges needn't set it).
+   */
+  readonly authoritative?: boolean;
   evaluate(input: JudgeInput): Promise<JudgeVerdict>;
 }
 

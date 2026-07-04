@@ -168,8 +168,11 @@ export async function payForOrder(
     paymentHeader: args.paymentHeader,
     requirements,
     agentId: args.buyerAgentId,
+    expectedPayer: args.buyerWallet,
     context: `order:${order.id}`,
   });
+  // Defense in depth: the rail already refused a mismatched payer before
+  // moving funds, so this should never fire — but never settle if it does.
   if (settlement.payer !== args.buyerWallet.toLowerCase()) {
     throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
   }

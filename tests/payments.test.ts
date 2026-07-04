@@ -107,18 +107,41 @@ describe('x402 payment flow (spec E2E)', () => {
     ).rejects.toThrow(/already used|already settled/);
   });
 
-  it('a payment from a different wallet than the authenticated buyer is rejected', async () => {
-    const mallory = await makeAgent(db, 'mallory');
-    fundWallet(mallory.wallet, 1000n);
+  it('a payment naming a different wallet is rejected WITHOUT touching that wallet', async () => {
+    // The attack: an authenticated agent names a victim's wallet as the payer
+    // to drain it. The rail must reject before any funds move — the victim's
+    // balance is unchanged and nothing lands in the platform wallet.
+    const victim = await makeAgent(db, 'victim');
+    fundWallet(victim.wallet, 1000n);
+    const platformWallet = '0xp1a7f0rm000000000000000000000000000000000';
+    const victimBefore = getMockRail().balanceOf(victim.wallet);
+    const platformBefore = getMockRail().balanceOf(platformWallet);
+
     const quote = await createOrderQuote(db, { buyerAgentId: buyer.id, listingId, inputPayload: {} });
     await expect(
       payForOrder(db, {
         orderId: quote.orderId,
         buyerAgentId: buyer.id,
         buyerWallet: buyer.wallet,
-        paymentHeader: MockRail.paymentHeader(mallory.wallet),
+        paymentHeader: MockRail.paymentHeader(victim.wallet), // forged payer
       }),
     ).rejects.toThrow(/different wallet/);
+
+    // No funds moved anywhere.
+    expect(getMockRail().balanceOf(victim.wallet)).toBe(victimBefore);
+    expect(getMockRail().balanceOf(platformWallet)).toBe(platformBefore);
+
+    // And the same header (fresh nonce) can't be replayed to drain either —
+    // a legitimate retry from the real buyer still works.
+    fundWallet(buyer.wallet, 1000n);
+    const paid = await payForOrder(db, {
+      orderId: quote.orderId,
+      buyerAgentId: buyer.id,
+      buyerWallet: buyer.wallet,
+      paymentHeader: MockRail.paymentHeader(buyer.wallet),
+    });
+    expect(paid.state).toBe('escrowed');
+    expect(getMockRail().balanceOf(victim.wallet)).toBe(victimBefore); // still untouched
   });
 });
 

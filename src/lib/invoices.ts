@@ -123,8 +123,10 @@ export async function payInvoice(
     paymentHeader: args.paymentHeader,
     requirements,
     agentId: args.buyerAgentId,
+    expectedPayer: args.buyerWallet,
     context: `invoice:${invoice.id}`,
   });
+  // Defense in depth: the rail already refused a mismatched payer pre-settle.
   if (settlement.payer !== args.buyerWallet.toLowerCase()) {
     throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
   }

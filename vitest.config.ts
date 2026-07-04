@@ -14,6 +14,10 @@ export default defineConfig({
     env: {
       PLATFORM_FEE_BPS: '1000',
       APPEAL_DEPOSIT_BPS: '500',
+      // The suite runs on the always-PASS stub judge (no provider keys in CI),
+      // so it opts into stub auto-pass. The dedicated fail-closed test flips
+      // this back on to prove judged orders hold when no real judge exists.
+      REQUIRE_REAL_JUDGES: 'false',
     },
     testTimeout: 30_000,
     hookTimeout: 30_000,

@@ -31,6 +31,10 @@ export async function settleInboundIdempotent(
     requirements: PaymentRequirements;
     /** Authenticated agent — must be the payer. */
     agentId: string;
+    /** The authenticated agent's wallet. Checked by the rail BEFORE any
+     * funds move; a payment from any other wallet is rejected with no
+     * on-chain effect. */
+    expectedPayer: string;
     /** What this payment is for, e.g. `order:{id}` — a header can never be
      * reused across contexts. */
     context: string;
@@ -69,7 +73,11 @@ export async function settleInboundIdempotent(
   }
 
   try {
-    const settlement = await getRail().settleInbound(args.paymentHeader, args.requirements);
+    const settlement = await getRail().settleInbound(
+      args.paymentHeader,
+      args.requirements,
+      args.expectedPayer,
+    );
     await db
       .update(idempotencyKeys)
       .set({

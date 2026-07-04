@@ -9,6 +9,9 @@ import type { Judge, JudgeInput, JudgeVerdict } from './judge';
  */
 export class StubJudge implements Judge {
   readonly model: string;
+  // The stub approves (or rejects) mechanically — it has not actually judged
+  // anything, so its verdict must never auto-settle real money.
+  readonly authoritative = false;
   private readonly verdict: 'PASS' | 'FAIL';
   private readonly confidence: number;
 

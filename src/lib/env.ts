@@ -26,3 +26,24 @@ export function failOverrideWindowSeconds(): number {
 export function appSecret(): string {
   return process.env.APP_SECRET ?? 'dev-secret';
 }
+
+export function paymentsMode(): string {
+  return process.env.PAYMENTS_MODE ?? 'mock';
+}
+
+/**
+ * Whether the verifier must have a real judge configured before it will
+ * auto-settle an order with `judged` acceptance criteria. When true and no
+ * provider key is set, judged orders fail CLOSED (funds held for the buyer)
+ * instead of being auto-PASSed by the always-approve dev stub.
+ *
+ * Defaults to ON — the marketplace's core promise is that judged work is
+ * actually verified, so a misconfigured deployment must never silently
+ * rubber-stamp it. Set REQUIRE_REAL_JUDGES=false to opt into the old
+ * stub-auto-pass behavior for a throwaway local demo.
+ */
+export function requireRealJudges(): boolean {
+  const raw = process.env.REQUIRE_REAL_JUDGES;
+  if (raw === undefined || raw === '') return true;
+  return !/^(0|false|no|off)$/i.test(raw.trim());
+}

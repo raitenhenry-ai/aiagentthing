@@ -59,11 +59,18 @@ export interface PaymentRail {
   /**
    * Verify + settle an inbound X-PAYMENT payload against requirements via
    * the facilitator. Throws PaymentError on any mismatch; success means the
-   * funds are on-chain in the platform escrow wallet.
+   * funds are on-chain in the payTo wallet.
+   *
+   * `expectedPayer` (the authenticated agent's wallet) is checked BEFORE any
+   * funds move — a payment whose payer is not the authenticated agent is
+   * rejected with `payer_mismatch` and no on-chain effect. This ordering is
+   * load-bearing: it stops a rejected payment from stranding (or, on the
+   * unsigned mock rail, draining) the named wallet's funds.
    */
   settleInbound(
     paymentHeader: string,
     requirements: PaymentRequirements,
+    expectedPayer?: string,
   ): Promise<InboundSettlement>;
   /**
    * Transfer USDC from the platform wallet to an agent wallet. Idempotent

@@ -42,6 +42,60 @@ function extractUrls(value: unknown): string[] {
   return [...new Set(text.match(/https?:\/\/[^\s"'<>\\)\]]+/g) ?? [])];
 }
 
+/**
+ * RFC-4180 CSV parser: honors quoted fields, so embedded commas, newlines,
+ * and escaped quotes ("") inside a quoted field do NOT break record or column
+ * boundaries. Returns one string[] per record. Throws on an unterminated
+ * quote.
+ */
+function parseCsv(input: string): string[][] {
+  const text = input.replace(/\r\n?/g, '\n');
+  const records: string[][] = [];
+  let field = '';
+  let record: string[] = [];
+  let inQuotes = false;
+  let sawAny = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      sawAny = true;
+    } else if (ch === ',') {
+      record.push(field);
+      field = '';
+      sawAny = true;
+    } else if (ch === '\n') {
+      record.push(field);
+      records.push(record);
+      record = [];
+      field = '';
+      sawAny = false;
+    } else {
+      field += ch;
+      sawAny = true;
+    }
+  }
+  if (inQuotes) throw new Error('unterminated quoted field');
+  if (sawAny || field !== '' || record.length > 0) {
+    record.push(field);
+    records.push(record);
+  }
+  return records;
+}
+
 type ProgrammaticCheck = (
   params: Record<string, unknown>,
   ctx: CheckContext,
@@ -99,11 +153,18 @@ const PROGRAMMATIC_CHECKS: Record<string, ProgrammaticCheck> = {
     if (typeof target !== 'string' || target.trim() === '') {
       return { pass: false, detail: 'target is not a non-empty string' };
     }
-    const lines = target.trim().split(/\r?\n/);
-    const width = (lines[0] ?? '').split(',').length;
-    const ragged = lines.findIndex((l) => l.split(',').length !== width);
+    let records: string[][];
+    try {
+      records = parseCsv(target);
+    } catch (e) {
+      return { pass: false, detail: (e as Error).message };
+    }
+    const first = records[0];
+    if (!first) return { pass: false, detail: 'no rows' };
+    const width = first.length;
+    const ragged = records.findIndex((r) => r.length !== width);
     return ragged === -1
-      ? { pass: true, detail: `csv with ${lines.length} rows × ${width} cols` }
+      ? { pass: true, detail: `csv with ${records.length} rows × ${width} cols` }
       : { pass: false, detail: `row ${ragged + 1} has inconsistent column count` };
   },
 

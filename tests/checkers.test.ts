@@ -62,6 +62,26 @@ describe('programmatic checkers', () => {
     }
   });
 
+  it('csv_parsable honors RFC-4180 quoted fields (commas, newlines, escaped quotes)', async () => {
+    const cases: Array<[string, 'PASS' | 'FAIL', string]> = [
+      // Quoted field with an embedded comma — still 2 columns per row.
+      ['name,note\nalice,"hello, world"\nbob,plain', 'PASS', 'embedded comma'],
+      // Quoted field with an embedded newline — must not split the record.
+      ['name,note\nalice,"line one\nline two"\nbob,ok', 'PASS', 'embedded newline'],
+      // Escaped quotes inside a quoted field.
+      ['name,note\nalice,"she said ""hi"""\nbob,ok', 'PASS', 'escaped quotes'],
+      // Genuinely ragged rows are still caught.
+      ['a,b,c\n1,2', 'FAIL', 'ragged row'],
+    ];
+    for (const [csv, expected, label] of cases) {
+      const r = await runMachineCriterion(
+        { id: 'x', type: 'programmatic', spec: { check: 'csv_parsable', params: { field: 'csv' } } },
+        ctx({ csv }),
+      );
+      expect(r.verdict, label).toBe(expected);
+    }
+  });
+
   it('unknown checks fail closed', async () => {
     const r = await runMachineCriterion(
       { id: 'x', type: 'programmatic', spec: { check: 'rm_rf_slash' } },

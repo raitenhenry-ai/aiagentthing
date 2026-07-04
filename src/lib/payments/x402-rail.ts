@@ -81,6 +81,7 @@ export class X402Rail implements PaymentRail {
   async settleInbound(
     paymentHeader: string,
     requirements: PaymentRequirements,
+    expectedPayer?: string,
   ): Promise<InboundSettlement> {
     let payload;
     try {
@@ -98,6 +99,13 @@ export class X402Rail implements PaymentRail {
     const verification = await this.facilitator.verify(payload, reqs);
     if (!verification.isValid) {
       throw new PaymentError('verification_failed', verification.invalidReason ?? 'invalid');
+    }
+    // Enforce payer identity AFTER verify (funds have not moved) and BEFORE
+    // settle (which moves them). A valid payment from a wallet other than the
+    // authenticated agent is refused with no on-chain effect.
+    const verifiedPayer = (verification.payer ?? '').toLowerCase();
+    if (expectedPayer !== undefined && verifiedPayer && verifiedPayer !== expectedPayer.toLowerCase()) {
+      throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
     }
     const settlement = await this.facilitator.settle(payload, reqs);
     if (!settlement.success) {

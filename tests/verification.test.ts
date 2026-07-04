@@ -91,6 +91,44 @@ describe('verification pipeline', () => {
   });
 });
 
+describe('fail-closed when no real judge is configured', () => {
+  it('holds funds for the buyer instead of auto-passing a judged order', async () => {
+    const prev = process.env.REQUIRE_REAL_JUDGES;
+    process.env.REQUIRE_REAL_JUDGES = 'true'; // no provider keys in CI → stub only
+    try {
+      const orderId = await makeEscrowedOrder(db, buyer, listingId, {});
+      // Default panel path: submitDelivery → runVerification() with no panel,
+      // which degrades to the always-PASS stub. The schema criterion passes,
+      // but the judged criterion cannot be verified, so the order must NOT
+      // settle — it fails closed and holds the buyer's funds.
+      const { verdict } = await submitDelivery(db, {
+        orderId,
+        sellerAgentId: seller.id,
+        artifacts: [{ inline: { summary: 'a plausible-looking summary' } }],
+        receipts: [{ step: 'did the work' }],
+      });
+      expect(verdict).toBe('FAIL');
+
+      const row = (await db.select().from(orders).where(eq(orders.id, orderId)))[0]!;
+      expect(row.state).toBe('failed');
+      expect(row.failWindowEndsAt).not.toBeNull();
+      // Seller is not paid; the buyer's money stays in escrow (recourse open).
+      expect(getMockRail().balanceOf(seller.wallet)).toBe(0n);
+
+      const vRow = (
+        await db.select().from(verifications).where(eq(verifications.orderId, orderId))
+      )[0]!;
+      expect(vRow.tier).toBe('dispute');
+      expect(
+        (vRow.judgeVerdicts as { no_judge_configured?: boolean }).no_judge_configured,
+      ).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.REQUIRE_REAL_JUDGES;
+      else process.env.REQUIRE_REAL_JUDGES = prev;
+    }
+  });
+});
+
 describe('injection resistance (spec E2E)', () => {
   it('an injection attempt in the deliverable does not flip a FAIL verdict', async () => {
     const orderId = await makeEscrowedOrder(db, buyer, listingId, {});

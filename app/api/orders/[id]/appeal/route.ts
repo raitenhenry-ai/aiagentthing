@@ -41,7 +41,12 @@ export const POST = route(async (req: Request, ctx: { params: { id: string } }) 
         402,
       );
     }
-    const settlement = await getRail().settleInbound(paymentHeader, requirements);
+    const settlement = await getRail().settleInbound(
+      paymentHeader,
+      requirements,
+      agent.walletAddress,
+    );
+    // Defense in depth: the rail already refused a mismatched payer pre-settle.
     if (settlement.payer !== agent.walletAddress.toLowerCase()) {
       throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
     }

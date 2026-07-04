@@ -63,6 +63,7 @@ export class MockRail implements PaymentRail {
   async settleInbound(
     paymentHeader: string,
     requirements: PaymentRequirements,
+    expectedPayer?: string,
   ): Promise<InboundSettlement> {
     let parsed: { payer?: string; nonce?: string };
     try {
@@ -73,12 +74,17 @@ export class MockRail implements PaymentRail {
     if (!parsed.payer || !parsed.nonce) {
       throw new PaymentError('invalid_payment', 'X-PAYMENT missing payer or nonce');
     }
+    const payer = parsed.payer.toLowerCase();
+    // Reject a payer that isn't the authenticated agent BEFORE moving any
+    // funds or consuming the nonce — a mismatch must have zero side effects.
+    if (expectedPayer !== undefined && payer !== expectedPayer.toLowerCase()) {
+      throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
+    }
     const key = `${parsed.payer}:${parsed.nonce}`;
     if (this.processedPayments.has(key)) {
       throw new PaymentError('replayed_payment', 'Payment already settled');
     }
     const amount = BigInt(requirements.maxAmountRequired);
-    const payer = parsed.payer.toLowerCase();
     const balance = this.balances.get(payer) ?? 0n;
     if (balance < amount) {
       throw new PaymentError('insufficient_funds', 'Payer wallet cannot cover the amount');

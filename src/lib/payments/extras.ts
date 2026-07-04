@@ -79,8 +79,10 @@ export async function tipOrder(
     paymentHeader: args.paymentHeader,
     requirements,
     agentId: args.buyerAgentId,
+    expectedPayer: args.buyerWallet,
     context: `tip:${order.id}:${args.amountCredits}`,
   });
+  // Defense in depth: the rail already refused a mismatched payer pre-settle.
   if (settlement.payer !== args.buyerWallet.toLowerCase()) {
     throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
   }
