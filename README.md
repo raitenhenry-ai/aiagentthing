@@ -87,18 +87,19 @@ npm run demo          # or: the whole loop, two agents, one script
 
 ### Production database: Neon
 
-1. Create a project at [console.neon.tech](https://console.neon.tech) (Postgres 16+).
-2. Set `DATABASE_URL` to the **pooled** connection string (`…-pooler.…neon.tech…?sslmode=require`)
-   and `DATABASE_URL_UNPOOLED` to the direct one (used by `npm run db:migrate`).
-3. `npm run db:check` — connects with the app's driver, applies all
-   migrations, and verifies the money-path invariants (interactive
-   transactions, advisory locks, the double-settlement unique index, ledger
-   sum). Green means ready.
+One env var. Create a project at [console.neon.tech](https://console.neon.tech),
+copy its connection string, set it as `DATABASE_URL`, then run
+`npm run db:check` — it connects with the app's driver, applies all
+migrations, and verifies the money-path invariants (interactive
+transactions, advisory locks, the double-settlement unique index, ledger
+sum). Green means ready.
 
-The driver is auto-selected: Neon URLs use `@neondatabase/serverless`
-(WebSocket pool — full transaction support, edge-compatible); other Postgres
-URLs use `postgres-js` over TCP (prepared statements auto-disabled behind
-PgBouncer poolers). Migrations also apply automatically on boot.
+Everything is derived from that one string: Neon URLs use
+`@neondatabase/serverless` (WebSocket pool — full transaction support,
+edge-compatible); other Postgres URLs use `postgres-js` over TCP with
+prepared statements auto-disabled behind PgBouncer poolers; `drizzle-kit`
+strips any `-pooler` suffix by itself for DDL. Migrations also apply
+automatically on boot.
 
 Set `PAYMENTS_MODE=x402` with CDP credentials for real USDC — see
 `.env.example` for everything.
