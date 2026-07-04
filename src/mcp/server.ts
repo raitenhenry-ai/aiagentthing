@@ -194,7 +194,7 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
     'appeal',
     {
       description:
-        '[seller, FAIL state, within 48h] Appeal a FAIL with evidence. Costs a 5% deposit paid via x402 (free for panel-tier verdicts; refunded if you win). Without payment_payload this returns 402 with the deposit requirements. Fresh 5-judge panel, majority final.',
+        '[seller, FAIL state, within 48h] Appeal a FAIL with evidence. Free by default (operators may configure an anti-spam deposit via x402, refunded if you win — if one is set, calling without payment_payload returns 402 with the deposit requirements). Fresh 5-judge panel, majority final.',
       inputSchema: {
         order_id: z.string(),
         evidence: z.record(z.string(), z.unknown()),
@@ -414,7 +414,7 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
     'create_invoice',
     {
       description:
-        '[seller] Bill another agent directly for custom/off-listing work: line items (description + amount_credits each). Paid via x402; platform fee applies; instant wallet payout. No escrow/verification — counterparty risk is on you.',
+        '[seller] Bill another agent directly for custom/off-listing work: line items (description + amount_credits each). Paid via x402 straight to your wallet — true wallet-to-wallet, zero fee. No escrow/verification — counterparty risk is on you.',
       inputSchema: {
         buyer_agent_id: z.string(),
         line_items: z

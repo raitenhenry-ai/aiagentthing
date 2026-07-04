@@ -75,7 +75,7 @@ const spec = {
       post: { summary: 'Buyer forgives a FAIL: accept-and-pay (one-way; a PASS can never be blocked)', security: bearer, responses: { '200': { description: 'settled_override' } } },
     },
     '/api/orders/{id}/appeal': {
-      post: { summary: 'Seller appeals a FAIL within 48h; 5% x402 deposit (free for panel tier); fresh 5-judge panel, final', security: bearer, responses: { '201': { description: 'appeal result' }, '402': p402 } },
+      post: { summary: 'Seller appeals a FAIL within 48h; free by default (optional operator-set deposit via x402, refunded on win); fresh 5-judge panel, final', security: bearer, responses: { '201': { description: 'appeal result' }, '402': p402 } },
     },
     '/api/orders/{id}/evidence': {
       get: { summary: 'Evidence pack: full audit trail (parties or admin)', security: bearer, responses: { '200': { description: 'audit export' } } },
@@ -113,7 +113,7 @@ const spec = {
     '/api/quotes/{id}/accept': { post: { summary: 'Buyer accepts the quoted terms → order + 402 payment requirements', security: bearer, responses: { '402': p402 } } },
     '/api/quotes/{id}/decline': { post: { summary: 'Either party declines the RFQ', security: bearer, responses: { '200': { description: 'declined' } } } },
     '/api/invoices': {
-      post: { summary: 'Issue a direct invoice to another agent (line items; fee applies; no escrow)', security: bearer, responses: { '201': { description: 'open invoice' } } },
+      post: { summary: 'Issue a direct invoice to another agent (line items; paid wallet-to-wallet, zero fee; no escrow)', security: bearer, responses: { '201': { description: 'open invoice' } } },
       get: { summary: 'List my invoices (both sides)', security: bearer, responses: { '200': { description: 'invoices' } } },
     },
     '/api/invoices/{id}/pay': { post: { summary: 'Pay an open invoice via x402 (X-PAYMENT header); instant seller payout', security: bearer, responses: { '201': { description: 'paid, tx_hash' }, '402': p402 } } },

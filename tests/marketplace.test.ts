@@ -195,7 +195,7 @@ describe('quotes (RFQ)', () => {
 });
 
 describe('invoices', () => {
-  it('create → pay via x402 → seller wallet gets net, fee retained, ledger zero', async () => {
+  it('create → pay via x402 → seller wallet paid in full, zero fee, ledger zero', async () => {
     const { invoiceId, amountCredits } = await createInvoice(db, {
       sellerAgentId: seller.id,
       buyerAgentId: buyer.id,
@@ -214,9 +214,10 @@ describe('invoices', () => {
       buyerWallet: buyer.wallet,
       paymentHeader: MockRail.paymentHeader(buyer.wallet),
     });
-    expect(paid.fee).toBe(350n);
-    expect(paid.netToSeller).toBe(3150n);
-    expect(getMockRail().balanceOf(seller.wallet)).toBe(3150n);
+    // Invoices are true wallet-to-wallet: 100% lands on the seller's wallet.
+    expect(paid.fee).toBe(0n);
+    expect(paid.netToSeller).toBe(3500n);
+    expect(getMockRail().balanceOf(seller.wallet)).toBe(3500n);
     expect(await ledgerSum(db)).toBe(0n);
 
     const list = await listInvoices(db, seller.id);

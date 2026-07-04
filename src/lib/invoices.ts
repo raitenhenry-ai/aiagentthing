@@ -4,17 +4,29 @@ import type { Db } from '@/db/client';
 import { agents, invoices } from '@/db/schema';
 import { ApiError } from './http';
 import { newId } from './ids';
-import { agentAccount, feeFor, PLATFORM_FEES, postMovement, topUp } from './ledger';
+import { agentAccount, EXTERNAL_BASE, postMovement } from './ledger';
 import { getRail } from './payments';
 import { settleInboundIdempotent } from './payments/inbound';
-import { executePayout, enqueuePayout } from './payments/payouts';
 import { PaymentError, type PaymentRequirements } from './payments/rail';
 import { emitWebhookEvent } from './webhooks';
 
 // Direct invoicing between agents: custom/off-listing work, retainers,
-// post-hoc billing. Paid via the exact same x402 flow; the platform fee
-// applies; funds pay out to the seller's wallet immediately (no escrow, no
-// judge panel — counterparty risk is priced via reputation + reviews).
+// post-hoc billing. TRUE wallet-to-wallet: the x402 payment names the
+// seller's own wallet as the recipient, so USDC goes straight from buyer to
+// seller — Clearing never holds it and takes nothing. The ledger records a
+// pass-through pair (in + out, same tx hash) purely for the audit trail.
+// No escrow, no judge panel — counterparty risk is priced via reputation +
+// reviews.
+
+async function sellerWalletOf(db: Db, sellerAgentId: string): Promise<string> {
+  const rows = await db
+    .select({ wallet: agents.walletAddress })
+    .from(agents)
+    .where(eq(agents.id, sellerAgentId));
+  const wallet = rows[0]?.wallet;
+  if (!wallet) throw new ApiError('not_found', 'Seller not found', 404);
+  return wallet;
+}
 
 const lineItemSchema = z.object({
   description: z.string().min(1).max(500),
@@ -22,11 +34,6 @@ const lineItemSchema = z.object({
 });
 
 export const invoiceLineItemsSchema = z.array(lineItemSchema).min(1).max(50);
-
-function invoiceFeeBps(): number {
-  const raw = process.env.INVOICE_FEE_BPS ?? process.env.PLATFORM_FEE_BPS ?? '1000';
-  return Number.parseInt(raw, 10);
-}
 
 export async function createInvoice(
   db: Db,
@@ -79,10 +86,13 @@ export async function invoiceRequirements(
   const invoice = rows[0];
   if (!invoice) throw new ApiError('not_found', 'Invoice not found', 404);
   if (invoice.status !== 'open') throw new ApiError('bad_state', `Invoice is ${invoice.status}`, 409);
+  // Paid straight to the seller's own wallet — never platform custody.
+  const sellerWallet = await sellerWalletOf(db, invoice.sellerAgentId);
   return getRail().buildRequirements({
     amountCredits: invoice.amountCredits,
     resource: `/api/invoices/${invoice.id}/pay`,
     description: `Clearing invoice ${invoice.id}: ${invoice.memo || 'services'}`,
+    payTo: sellerWallet,
     extra: { invoice_id: invoice.id, kind: 'invoice' },
   });
 }
@@ -119,17 +129,6 @@ export async function payInvoice(
     throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
   }
 
-  const sellerRows = await db
-    .select({ wallet: agents.walletAddress })
-    .from(agents)
-    .where(eq(agents.id, invoice.sellerAgentId));
-  const sellerWallet = sellerRows[0]?.wallet;
-  if (!sellerWallet) throw new ApiError('not_found', 'Seller not found', 404);
-
-  const fee = feeFor(invoice.amountCredits, invoiceFeeBps());
-  const net = invoice.amountCredits - fee;
-
-  let payoutId: string | undefined;
   await db.transaction(async (tx) => {
     const locked = await tx
       .select({ status: invoices.status })
@@ -137,26 +136,22 @@ export async function payInvoice(
       .where(eq(invoices.id, invoice.id))
       .for('update');
     if (locked[0]?.status !== 'open') return; // concurrent payer finalized
-    await topUp(tx, args.buyerAgentId, invoice.amountCredits, settlement.txHash);
+    // USDC already went buyer wallet -> seller wallet on-chain. Record the
+    // pass-through (in + out, same tx) so the audit trail is complete while
+    // no phantom credit balance is created.
     await postMovement(tx, {
-      from: agentAccount(args.buyerAgentId),
+      from: EXTERNAL_BASE,
       to: agentAccount(invoice.sellerAgentId),
-      amount: net,
+      amount: invoice.amountCredits,
       entryType: 'invoice_payment',
+      txHash: settlement.txHash,
     });
-    if (fee > 0n) {
-      await postMovement(tx, {
-        from: agentAccount(args.buyerAgentId),
-        to: PLATFORM_FEES,
-        amount: fee,
-        entryType: 'fee',
-      });
-    }
-    payoutId = await enqueuePayout(tx, {
-      agentId: invoice.sellerAgentId,
-      toWallet: sellerWallet,
-      amountCredits: net,
-      reason: 'invoice',
+    await postMovement(tx, {
+      from: agentAccount(invoice.sellerAgentId),
+      to: EXTERNAL_BASE,
+      amount: invoice.amountCredits,
+      entryType: 'withdrawal',
+      txHash: settlement.txHash,
     });
     await tx
       .update(invoices)
@@ -164,15 +159,17 @@ export async function payInvoice(
       .where(eq(invoices.id, invoice.id));
   });
 
-  // Post-commit: execute the seller payout (retried by the worker on failure).
-  if (payoutId) await executePayout(db, payoutId).catch(() => undefined);
-
   emitWebhookEvent(db, {
     event: 'invoice.paid',
     agentIds: [invoice.sellerAgentId, args.buyerAgentId],
     payload: { invoice_id: invoice.id, tx_hash: settlement.txHash },
   });
-  return { invoiceId: invoice.id, txHash: settlement.txHash, netToSeller: net, fee };
+  return {
+    invoiceId: invoice.id,
+    txHash: settlement.txHash,
+    netToSeller: invoice.amountCredits, // wallet-to-wallet: 100% to the seller
+    fee: 0n,
+  };
 }
 
 export async function voidInvoice(

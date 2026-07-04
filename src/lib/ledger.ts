@@ -228,7 +228,8 @@ export async function depositHeld(tx: Tx, orderId: string): Promise<bigint> {
 }
 
 /**
- * Hold the seller's appeal deposit (5% of order value; refunded if the
+ * Hold the seller's appeal deposit (APPEAL_DEPOSIT_BPS of order value —
+ * 0 by default, so this is usually a no-op; refunded if the
  * appeal succeeds, forfeited to platform fees if it fails).
  */
 export async function holdAppealDeposit(

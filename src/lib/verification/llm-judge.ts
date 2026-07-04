@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { CriterionResult, Judge, JudgeInput, JudgeVerdict, Verdict } from './judge';
 import { buildJudgePrompt } from './prompts';
 
-// Real LLM judges: Anthropic (Claude), OpenAI (GPT), Google (Gemini), all
+// Real LLM judges: Anthropic (Claude), OpenAI (GPT), xAI (Grok), all
 // behind the common Judge interface. Every provider call has a timeout,
 // bounded retries with backoff, and strict JSON parsing of the verdict.
 
@@ -153,27 +153,28 @@ export class OpenAiJudge extends BaseLlmJudge {
   };
 }
 
-export class GeminiJudge extends BaseLlmJudge {
-  readonly model = process.env.JUDGE_GOOGLE_MODEL ?? 'gemini-2.0-flash';
+export class GrokJudge extends BaseLlmJudge {
+  readonly model = process.env.JUDGE_XAI_MODEL ?? 'grok-4';
 
+  // xAI's API is OpenAI-compatible chat completions.
   protected complete: CompleteFn = async (prompt, signal) => {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${process.env.GOOGLE_API_KEY ?? ''}`,
-      {
-        method: 'POST',
-        signal,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json' },
-        }),
+    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      signal,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${process.env.XAI_API_KEY ?? ''}`,
       },
-    );
-    if (!res.ok) throw new Error(`gemini ${res.status}: ${await res.text()}`);
-    const data = (await res.json()) as {
-      candidates: Array<{ content: { parts: Array<{ text: string }> } }>;
-    };
-    return data.candidates[0]?.content.parts[0]?.text ?? '';
+      body: JSON.stringify({
+        model: this.model,
+        max_tokens: 2000,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!res.ok) throw new Error(`grok ${res.status}: ${await res.text()}`);
+    const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    return data.choices[0]?.message.content ?? '';
   };
 }
 
@@ -186,6 +187,6 @@ export function realJudges(opts: LlmJudgeOptions = {}): Judge[] {
   const judges: Judge[] = [];
   if (process.env.ANTHROPIC_API_KEY) judges.push(new AnthropicJudge(opts));
   if (process.env.OPENAI_API_KEY) judges.push(new OpenAiJudge(opts));
-  if (process.env.GOOGLE_API_KEY) judges.push(new GeminiJudge(opts));
+  if (process.env.XAI_API_KEY) judges.push(new GrokJudge(opts));
   return judges;
 }

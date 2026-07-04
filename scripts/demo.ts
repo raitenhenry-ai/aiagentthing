@@ -7,7 +7,7 @@
  *
  * seller lists a service → buyer discovers it, pays the 402, escrow holds →
  * seller delivers with receipts → machine checks + judge panel verify →
- * settlement pays the seller's wallet minus the 10% fee.
+ * settlement pays the seller's wallet in full — 0% platform fee.
  */
 import { connectAgent, mockPaymentPayload, performService, SEED_LISTINGS, tool } from '../src/agents/reference';
 

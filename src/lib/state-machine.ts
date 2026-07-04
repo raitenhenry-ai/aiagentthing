@@ -234,7 +234,7 @@ export async function transitionOrder(
       );
     }
 
-    // Opening an appeal holds the seller's 5% deposit — unless the verdict
+    // Opening an appeal holds the seller's deposit (if configured) — unless the verdict
     // came from the `panel` tier (split/low-confidence), which is appealable
     // at no fee by design.
     if (args.to === 'appealed') {

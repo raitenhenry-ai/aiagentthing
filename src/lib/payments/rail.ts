@@ -45,11 +45,15 @@ export class PaymentError extends Error {
 
 export interface PaymentRail {
   readonly network: string;
-  /** Build the x402 requirements returned with an HTTP 402 response. */
+  /** Build the x402 requirements returned with an HTTP 402 response.
+   * `payTo` overrides the recipient: escrowed orders omit it (platform
+   * custody wallet); direct payments (invoices, tips) pass the seller's own
+   * wallet so funds never touch the platform. */
   buildRequirements(args: {
     amountCredits: bigint;
     resource: string;
     description: string;
+    payTo?: string;
     extra?: Record<string, string>;
   }): Promise<PaymentRequirements>;
   /**

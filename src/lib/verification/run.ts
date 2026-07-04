@@ -19,7 +19,7 @@ import { realJudges } from './llm-judge';
 import { StubJudge } from './stub-judge';
 
 /**
- * The active panel: the real Claude/GPT/Gemini judges when provider keys are
+ * The active panel: the real Claude/GPT/Grok judges when provider keys are
  * configured, otherwise a single always-PASS stub so local dev runs without
  * any provider account.
  */

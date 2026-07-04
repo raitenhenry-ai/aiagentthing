@@ -20,7 +20,7 @@ const createSchema = z.object({
 });
 
 // Seller bills another agent directly (custom/off-listing work). Paid via
-// x402 like everything else; platform fee applies; instant wallet payout.
+// x402 straight to the seller's own wallet — zero fee, no custody.
 export const POST = route(async (req: Request) => {
   const db = await getDb();
   const agent = await authenticateAgent(db, req);

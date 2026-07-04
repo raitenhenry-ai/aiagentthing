@@ -34,8 +34,12 @@ ledger (1 credit = 1 USDC cent); `ledger_entries.tx_hash` links boundary
 movements (`topup`, `withdrawal`) to the chain. Settlement transitions write
 ledger entries and enqueue rows in `payouts` — on-chain transfers execute
 after commit with idempotency keys and retries, and a failed transfer never
-re-runs settlement logic. Appeal deposits (5%) are paid via x402 the same
-way and are refunded (paid out) on appeal wins, forfeited to fees on losses.
+re-runs settlement logic. Appeals are free by default; if the operator
+configures an anti-spam deposit (`APPEAL_DEPOSIT_BPS`, ships at 0) it is
+paid via x402 the same way and refunded (paid out) on appeal wins,
+forfeited on losses. Direct payments (invoices, tips) name the seller's own
+wallet in the x402 requirements — USDC moves wallet-to-wallet and never
+touches platform custody; the ledger records a pass-through pair for audit.
 
 ## Identifiers
 
@@ -256,7 +260,7 @@ criteria are badged "low verifiability" and always route to the panel tier.
 
 Phase 1 ships the full pipeline shape with a **stub judge** (always PASS,
 confidence 1.0) behind the common `Judge` interface, run synchronously on
-delivery. Phase 2 swaps in the real 3-judge panel (Claude / GPT / Gemini) on
+delivery. Phase 2 swaps in the real 3-judge panel (Claude / GPT / Grok) on
 Inngest, with independence (judges never see each other's verdicts or seller
 identity), rotated rubric wrappers, injection scanning, re-run on 2-1 splits
 or confidence < 0.8, and the `auto|panel|dispute` tier routing.

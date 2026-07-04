@@ -36,13 +36,14 @@ export class MockRail implements PaymentRail {
     amountCredits: bigint;
     resource: string;
     description: string;
+    payTo?: string;
     extra?: Record<string, string>;
   }): Promise<PaymentRequirements> {
     return {
       scheme: 'exact',
       network: this.network,
       asset: 'mock-usdc',
-      payTo: MOCK_PLATFORM_WALLET,
+      payTo: (args.payTo ?? MOCK_PLATFORM_WALLET).toLowerCase(),
       maxAmountRequired: creditsToAtomic(args.amountCredits).toString(),
       resource: args.resource,
       description: args.description,

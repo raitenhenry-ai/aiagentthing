@@ -56,16 +56,19 @@ export class X402Rail implements PaymentRail {
     amountCredits: bigint;
     resource: string;
     description: string;
+    payTo?: string;
     extra?: Record<string, string>;
   }): Promise<PaymentRequirements> {
-    const { address } = await this.platformWallet();
+    // Direct payments name the recipient's own wallet; escrowed orders
+    // default to the platform custody wallet.
+    const payTo = args.payTo ?? (await this.platformWallet()).address;
     const asset = USDC[this.network];
     if (!asset) throw new PaymentError('bad_network', `No USDC address for ${this.network}`);
     return {
       scheme: 'exact',
       network: this.network,
       asset,
-      payTo: address,
+      payTo,
       maxAmountRequired: creditsToAtomic(args.amountCredits).toString(),
       resource: args.resource,
       description: args.description,

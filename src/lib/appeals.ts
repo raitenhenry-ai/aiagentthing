@@ -7,7 +7,7 @@ import { feeFor } from './ledger';
 import { newId } from './ids';
 import { transitionOrder } from './state-machine';
 import type { Judge, Verdict } from './verification/judge';
-import { AnthropicJudge, GeminiJudge, OpenAiJudge } from './verification/llm-judge';
+import { AnthropicJudge, GrokJudge, OpenAiJudge } from './verification/llm-judge';
 import { judgeMaterials, loadOrderMaterials } from './verification/run';
 import { StubJudge } from './verification/stub-judge';
 
@@ -25,7 +25,7 @@ export function appealPanel(): Judge[] {
   if (process.env.OPENAI_API_KEY) {
     judges.push(new OpenAiJudge({ wrapperIndex: 2 }), new OpenAiJudge({ wrapperIndex: 0 }));
   }
-  if (process.env.GOOGLE_API_KEY) judges.push(new GeminiJudge({ wrapperIndex: 1 }));
+  if (process.env.XAI_API_KEY) judges.push(new GrokJudge({ wrapperIndex: 1 }));
   if (judges.length === 0) {
     return Array.from({ length: 5 }, (_, i) => new StubJudge({ model: `stub-appeal-${i}` }));
   }
@@ -58,7 +58,8 @@ export async function appealDepositFor(
 }
 
 /**
- * Seller appeals a FAIL within the 48h window. Holds the 5% deposit (waived
+ * Seller appeals a FAIL within the 48h window. Holds the configured
+ * deposit — 0 by default, so appeals are normally free (always waived
  * for `panel`-tier verdicts) via the state machine and opens a dispute.
  * An appeal is an appeal, not a veto — resolution can still refund the buyer.
  */

@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import { agents, listings, orders } from '@/db/schema';
 import { ApiError } from '../http';
-import { agentAccount, feeFor, PLATFORM_FEES, postMovement, topUp } from '../ledger';
+import { agentAccount, EXTERNAL_BASE, postMovement } from '../ledger';
 import { isSettled, type OrderState } from '../state-machine';
 import { emitWebhookEvent } from '../webhooks';
 import { getRail } from './index';
@@ -10,13 +10,10 @@ import { settleInboundIdempotent } from './inbound';
 import { enqueuePayout, executePayout } from './payouts';
 import { PaymentError, type PaymentRequirements } from './rail';
 
-// The remaining payment forms: tips (buyer bonus on a settled order) and
-// withdrawals (drain leftover credits — surplus payments, stranded deposits —
+// The remaining payment forms: tips (buyer bonus on a settled order — TRUE
+// wallet-to-wallet, paid straight to the seller's own wallet, zero fee) and
+// withdrawals (drain leftover credits — surplus payments, returned deposits —
 // back to the agent's wallet).
-
-function tipFeeBps(): number {
-  return Number.parseInt(process.env.TIP_FEE_BPS ?? '0', 10);
-}
 
 const MAX_TIP = 10_000_000n; // $100k sanity cap
 const MIN_WITHDRAWAL = () =>
@@ -30,10 +27,20 @@ export async function tipRequirements(
   if (amountCredits <= 0n || amountCredits > MAX_TIP) {
     throw new ApiError('invalid_amount', 'Tip amount out of range', 422);
   }
+  // Tips are paid straight to the seller's own wallet.
+  const rows = await db
+    .select({ wallet: agents.walletAddress })
+    .from(agents)
+    .innerJoin(listings, eq(listings.sellerAgentId, agents.id))
+    .innerJoin(orders, eq(orders.listingId, listings.id))
+    .where(eq(orders.id, orderId));
+  const sellerWallet = rows[0]?.wallet;
+  if (!sellerWallet) throw new ApiError('not_found', 'Order not found', 404);
   return getRail().buildRequirements({
     amountCredits,
     resource: `/api/orders/${orderId}/tip`,
     description: `Clearing tip on order ${orderId}`,
+    payTo: sellerWallet,
     extra: { order_id: orderId, kind: 'tip', amount: amountCredits.toString() },
   });
 }
@@ -78,58 +85,44 @@ export async function tipOrder(
     throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
   }
 
-  const sellerRows = await db
-    .select({ wallet: agents.walletAddress })
-    .from(agents)
-    .where(eq(agents.id, order.sellerAgentId));
-  const sellerWallet = sellerRows[0]?.wallet;
-  if (!sellerWallet) throw new ApiError('not_found', 'Seller not found', 404);
-
-  const fee = feeFor(args.amountCredits, tipFeeBps());
-  const net = args.amountCredits - fee;
-
-  let payoutId: string | undefined;
+  // USDC went buyer wallet -> seller wallet on-chain already; record the
+  // pass-through pair for the audit trail (no phantom credit balance).
   await db.transaction(async (tx) => {
     const { ledgerEntries } = await import('@/db/schema');
     const { and, eq: eq2 } = await import('drizzle-orm');
     const already = await tx
       .select({ id: ledgerEntries.id })
       .from(ledgerEntries)
-      .where(and(eq2(ledgerEntries.txHash, settlement.txHash), eq2(ledgerEntries.entryType, 'topup')));
+      .where(and(eq2(ledgerEntries.txHash, settlement.txHash), eq2(ledgerEntries.entryType, 'tip')));
     if (already.length > 0) return; // retry after commit — done already
-    await topUp(tx, args.buyerAgentId, args.amountCredits, settlement.txHash, order.id);
     await postMovement(tx, {
-      from: agentAccount(args.buyerAgentId),
+      from: EXTERNAL_BASE,
       to: agentAccount(order.sellerAgentId),
-      amount: net,
+      amount: args.amountCredits,
       entryType: 'tip',
       orderId: order.id,
+      txHash: settlement.txHash,
     });
-    if (fee > 0n) {
-      await postMovement(tx, {
-        from: agentAccount(args.buyerAgentId),
-        to: PLATFORM_FEES,
-        amount: fee,
-        entryType: 'fee',
-        orderId: order.id,
-      });
-    }
-    payoutId = await enqueuePayout(tx, {
+    await postMovement(tx, {
+      from: agentAccount(order.sellerAgentId),
+      to: EXTERNAL_BASE,
+      amount: args.amountCredits,
+      entryType: 'withdrawal',
       orderId: order.id,
-      agentId: order.sellerAgentId,
-      toWallet: sellerWallet,
-      amountCredits: net,
-      reason: 'tip',
+      txHash: settlement.txHash,
     });
   });
-  if (payoutId) await executePayout(db, payoutId).catch(() => undefined);
 
   emitWebhookEvent(db, {
     event: 'tip.received',
     agentIds: [order.sellerAgentId],
-    payload: { order_id: order.id, amount_credits: Number(net), tx_hash: settlement.txHash },
+    payload: {
+      order_id: order.id,
+      amount_credits: Number(args.amountCredits),
+      tx_hash: settlement.txHash,
+    },
   });
-  return { txHash: settlement.txHash, net };
+  return { txHash: settlement.txHash, net: args.amountCredits };
 }
 
 /**

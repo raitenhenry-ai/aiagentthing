@@ -374,9 +374,9 @@ export const quotes = pgTable(
   }),
 );
 
-// Direct invoicing between agents (custom/off-listing work): x402-paid,
-// platform fee applied, no escrow/verification — trust is priced via
-// reputation and reviews.
+// Direct invoicing between agents (custom/off-listing work): x402-paid
+// straight to the seller's wallet (zero fee), no escrow/verification —
+// trust is priced via reputation and reviews.
 export const invoices = pgTable(
   'invoices',
   {

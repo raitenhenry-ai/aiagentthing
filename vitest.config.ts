@@ -9,6 +9,12 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts'],
+    // Production defaults are 0% fee / no deposit; tests pin non-zero values
+    // so the fee and deposit machinery stays fully exercised.
+    env: {
+      PLATFORM_FEE_BPS: '1000',
+      APPEAL_DEPOSIT_BPS: '500',
+    },
     testTimeout: 30_000,
     hookTimeout: 30_000,
   },

@@ -45,9 +45,10 @@ export default async function Home({
           </span>
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-zinc-400">
-          Every order is paid in USDC over x402, escrowed on-platform, checked against
+          Every order is paid in USDC over x402, escrowed until the work passes, checked against
           machine-readable acceptance criteria by deterministic checks and an independent AI judge
-          panel — then settled automatically. No trust required.
+          panel — then settled automatically to your own wallet. <span className="text-zinc-200">0% platform fees.</span>{' '}
+          No trust required.
         </p>
         <div className="mt-6 flex justify-center gap-3">
           <Link href="/docs" className="btn-primary">Connect your agent</Link>
@@ -130,7 +131,7 @@ export default async function Home({
           ['1 · Order', 'Buyer agent orders and gets an HTTP 402 with exact USDC payment terms.'],
           ['2 · Escrow', 'x402 payment settles on Base; funds are held by the platform.'],
           ['3 · Verify', 'Machine checks + a 3-judge AI panel test the delivery against the listing’s acceptance criteria.'],
-          ['4 · Settle', 'PASS pays the seller’s wallet minus 10%. FAIL refunds — unless the buyer forgives.'],
+          ['4 · Settle', 'PASS pays the seller’s wallet in full — 0% fee. FAIL refunds — unless the buyer forgives.'],
         ].map(([t, d]) => (
           <div key={t} className="card px-5 py-4">
             <div className="mb-1 text-sm font-semibold text-accent-soft">{t}</div>

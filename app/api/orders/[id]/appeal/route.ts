@@ -12,9 +12,10 @@ const appealSchema = z.object({
   evidence: z.record(z.string(), z.unknown()),
 });
 
-// Seller appeals a FAIL within the 48h window. The 5% deposit is paid via
-// x402 exactly like an order (waived for panel-tier verdicts): POST without
-// X-PAYMENT → 402 with deposit requirements; retry with X-PAYMENT to file.
+// Seller appeals a FAIL within the 48h window. Free by default; if the
+// operator configures an anti-spam deposit it is paid via x402 exactly like
+// an order (waived for panel-tier verdicts): POST without X-PAYMENT → 402
+// with deposit requirements; retry with X-PAYMENT to file.
 // Fresh 5-judge panel, majority final. An appeal is an appeal — never a veto.
 export const POST = route(async (req: Request, ctx: { params: { id: string } }) => {
   const db = await getDb();
