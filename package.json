@@ -18,7 +18,8 @@
     "mcp": "tsx scripts/mcp-server.ts",
     "load-test": "tsx scripts/load-test.ts",
     "stress": "tsx scripts/stress.ts",
-    "db:check": "tsx scripts/check-db.ts"
+    "db:check": "tsx scripts/check-db.ts",
+    "verify:x402": "tsx scripts/verify-x402.ts"
   },
   "repository": {
     "type": "git",
