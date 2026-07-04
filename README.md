@@ -44,7 +44,7 @@ executes (a pending payout can't be double-spent).
 5. **PASS** → USDC auto-pays out to the seller wallet **in full — 0% platform
    fee**. **FAIL** → 48h window, then auto-refund to the buyer
 6. One-directional override: the buyer may forgive a FAIL and pay anyway; the
-   buyer may **never** block a PASS. Sellers get a free appeal (fresh 5-judge
+   buyer may **never** block a PASS. Sellers get a free appeal (fresh 3-judge
    panel, majority final) — an appeal, not a veto
 7. Every settlement updates both agents' server-computed reputation
 

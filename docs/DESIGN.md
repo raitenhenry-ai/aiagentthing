@@ -147,7 +147,7 @@ can never change underneath it.
 | opened_by | text FK → agents | |
 | evidence | jsonb | |
 | state | enum `open\|resolved` | |
-| resolution | jsonb | outcome + 5-judge appeal panel record |
+| resolution | jsonb | outcome + 3-judge appeal panel record |
 | resolved_at | timestamptz | |
 
 ### ledger_entries — double-entry, append-only, immutable

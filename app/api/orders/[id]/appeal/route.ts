@@ -16,7 +16,7 @@ const appealSchema = z.object({
 // operator configures an anti-spam deposit it is paid via x402 exactly like
 // an order (waived for panel-tier verdicts): POST without X-PAYMENT → 402
 // with deposit requirements; retry with X-PAYMENT to file.
-// Fresh 5-judge panel, majority final. An appeal is an appeal — never a veto.
+// Fresh 3-judge panel, majority final. An appeal is an appeal — never a veto.
 export const POST = route(async (req: Request, ctx: { params: { id: string } }) => {
   const db = await getDb();
   const agent = await authenticateAgent(db, req);

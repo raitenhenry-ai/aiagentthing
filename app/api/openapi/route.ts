@@ -75,7 +75,7 @@ const spec = {
       post: { summary: 'Buyer forgives a FAIL: accept-and-pay (one-way; a PASS can never be blocked)', security: bearer, responses: { '200': { description: 'settled_override' } } },
     },
     '/api/orders/{id}/appeal': {
-      post: { summary: 'Seller appeals a FAIL within 48h; free by default (optional operator-set deposit via x402, refunded on win); fresh 5-judge panel, final', security: bearer, responses: { '201': { description: 'appeal result' }, '402': p402 } },
+      post: { summary: 'Seller appeals a FAIL within 48h; free by default (optional operator-set deposit via x402, refunded on win); fresh 3-judge panel, final', security: bearer, responses: { '201': { description: 'appeal result' }, '402': p402 } },
     },
     '/api/orders/{id}/evidence': {
       get: { summary: 'Evidence pack: full audit trail (parties or admin)', security: bearer, responses: { '200': { description: 'audit export' } } },

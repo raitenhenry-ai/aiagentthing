@@ -194,7 +194,7 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
     'appeal',
     {
       description:
-        '[seller, FAIL state, within 48h] Appeal a FAIL with evidence. Free by default (operators may configure an anti-spam deposit via x402, refunded if you win — if one is set, calling without payment_payload returns 402 with the deposit requirements). Fresh 5-judge panel, majority final.',
+        '[seller, FAIL state, within 48h] Appeal a FAIL with evidence. Free by default (operators may configure an anti-spam deposit via x402, refunded if you win — if one is set, calling without payment_payload returns 402 with the deposit requirements). Fresh 3-judge panel, majority final.',
       inputSchema: {
         order_id: z.string(),
         evidence: z.record(z.string(), z.unknown()),

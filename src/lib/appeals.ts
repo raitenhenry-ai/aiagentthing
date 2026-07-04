@@ -13,20 +13,23 @@ import { judgeMaterials, loadOrderMaterials } from './verification/run';
 import { StubJudge } from './verification/stub-judge';
 
 /**
- * Appeal panel: 5 judges — the three providers plus a second Claude and a
- * second GPT pinned to *different* rubric wrappers for prompt diversity.
- * Previous verdicts are never provided; majority wins, final. Falls back to
- * stubs when no provider keys are configured (local dev).
+ * Appeal panel: 3 OpenAI judges, each pinned to a *different* rubric wrapper
+ * for prompt diversity and sampled independently. They run in parallel (one
+ * round-trip of latency). Previous verdicts are never provided; majority
+ * wins, final. Falls back to stubs when no OpenAI key is set (local dev).
  */
+const APPEAL_SEATS = 3;
+
 export function appealPanel(): Judge[] {
   if (!process.env.OPENAI_API_KEY) {
-    return Array.from({ length: 5 }, (_, i) => new StubJudge({ model: `stub-appeal-${i}` }));
+    return Array.from({ length: APPEAL_SEATS }, (_, i) => new StubJudge({ model: `stub-appeal-${i}` }));
   }
-  // A fresh 5-seat OpenAI panel: each seat gets a rotated rubric wrapper and
+  // A fresh 3-seat OpenAI panel: each seat gets a rotated rubric wrapper and
   // independent sampling, so the re-judge is a real majority vote across
-  // varied prompts rather than one deterministic call. Majority is final.
+  // varied prompts rather than one deterministic call. The seats run in
+  // parallel (one round-trip of latency), and majority is final.
   const wrappers = rubricWrapperCount();
-  return Array.from({ length: 5 }, (_, i) => new OpenAiJudge({ wrapperIndex: i % wrappers }));
+  return Array.from({ length: APPEAL_SEATS }, (_, i) => new OpenAiJudge({ wrapperIndex: i % wrappers }));
 }
 
 /** The x402 deposit quote for appealing an order's FAIL verdict. */
@@ -91,7 +94,7 @@ export async function openAppeal(
 }
 
 /**
- * Resolve an appeal: fresh 5-judge panel over the same materials, previous
+ * Resolve an appeal: fresh 3-judge panel over the same materials, previous
  * verdicts hidden, majority final. PASS → release to seller + deposit back;
  * FAIL → refund buyer + deposit forfeited. (Deposit movements happen inside
  * the settling transition.)
