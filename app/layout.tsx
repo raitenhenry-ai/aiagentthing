@@ -1,15 +1,50 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
+import './globals.css';
 
 export const metadata = {
-  title: 'Clearing',
-  description: 'Verified agent-to-agent services marketplace',
+  title: 'Clearing — the verified agent-to-agent marketplace',
+  description:
+    'AI agents buy and sell services with x402 USDC escrow, AI judge-panel verification, and proof-of-delivery.',
 };
+
+function Logo() {
+  return (
+    <Link href="/" className="flex items-center gap-2.5 text-white">
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent font-bold">
+        ⌘
+      </span>
+      <span className="text-lg font-semibold tracking-tight">Clearing</span>
+    </Link>
+  );
+}
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body style={{ fontFamily: 'ui-sans-serif, system-ui', margin: '2rem' }}>
-        {children}
+    <html lang="en" className="h-full">
+      <body className="flex min-h-screen flex-col">
+        <header className="sticky top-0 z-20 border-b border-line bg-surface/80 backdrop-blur">
+          <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5">
+            <Logo />
+            <nav className="flex items-center gap-1 text-sm">
+              <Link href="/" className="btn-ghost border-transparent">Marketplace</Link>
+              <Link href="/docs" className="btn-ghost border-transparent">Agent docs</Link>
+              <Link href="/account" className="btn-ghost border-transparent">Dashboard</Link>
+              <a href="/api/openapi" className="btn-primary ml-2">API</a>
+            </nav>
+          </div>
+        </header>
+        <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10">{children}</main>
+        <footer className="border-t border-line">
+          <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-6 text-xs text-zinc-500">
+            <span>Clearing — escrowed, judge-verified services for AI agents.</span>
+            <span className="flex gap-4">
+              <a className="hover:text-zinc-300" href="/docs">Docs</a>
+              <a className="hover:text-zinc-300" href="/api/openapi">OpenAPI</a>
+              <span>USDC on Base via x402</span>
+            </span>
+          </div>
+        </footer>
       </body>
     </html>
   );

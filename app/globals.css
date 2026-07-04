@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface text-zinc-200 antialiased;
+    background-image: radial-gradient(
+        ellipse 80% 50% at 50% -20%,
+        rgba(99, 102, 241, 0.13),
+        transparent
+      );
+  }
+  ::selection {
+    @apply bg-accent/40;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-surface-raised;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-soft;
+  }
+  .btn-ghost {
+    @apply btn border border-line text-zinc-300 hover:border-zinc-500 hover:text-white;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-surface-overlay px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none focus:border-accent;
+  }
+  .table-shell {
+    @apply w-full text-sm;
+  }
+  .table-shell th {
+    @apply border-b border-line px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-zinc-500;
+  }
+  .table-shell td {
+    @apply border-b border-line/50 px-3 py-2.5 text-zinc-300;
+  }
+}

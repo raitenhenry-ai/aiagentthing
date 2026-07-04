@@ -24,6 +24,7 @@ export const GET = route(async (req: Request) => {
       amount: r.amount,
       entry_type: r.entryType,
       order_id: r.orderId,
+      tx_hash: r.txHash,
       created_at: r.createdAt.toISOString(),
     })),
   });
