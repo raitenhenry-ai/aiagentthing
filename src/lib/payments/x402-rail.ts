@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { PaymentRequirementsSchema, PaymentPayloadSchema } from 'x402/types';
 import { useFacilitator } from 'x402/verify';
+import { verify as localVerify, settle as localSettle } from 'x402/facilitator';
 import { facilitator as mainnetFacilitator } from '@coinbase/x402';
 import {
   createPublicClient,
@@ -25,16 +26,18 @@ import {
 //
 //   1. Self-custody (default when PLATFORM_PRIVATE_KEY is set): the escrow
 //      wallet is an ordinary Base wallet — the same kind agents generate for
-//      themselves — and payouts are plain USDC transfers signed with that
-//      key via a public RPC. No Coinbase account needed. The wallet needs a
-//      little ETH on Base for gas.
+//      themselves. Payouts are plain USDC transfers signed with that key,
+//      and inbound x402 payments are verified AND settled locally (the
+//      platform wallet submits the payer-signed EIP-3009
+//      transferWithAuthorization itself, paying gas) — a BUILT-IN
+//      facilitator. Zero third-party accounts, testnet or mainnet. The
+//      wallet needs a little ETH on Base for gas.
 //   2. Coinbase CDP server wallets (CDP_API_KEY_ID/SECRET + CDP_WALLET_SECRET):
-//      managed custody, transfers via CDP with idempotency keys.
+//      managed custody; inbound goes through a remote facilitator
+//      (x402.org on base-sepolia, Coinbase's on base mainnet).
 //
-// Inbound settlement always goes through an x402 facilitator: the public
-// x402.org facilitator on base-sepolia (no keys), Coinbase's facilitator on
-// base mainnet (needs free CDP API keys), or any facilitator you point
-// X402_FACILITATOR_URL at.
+// X402_FACILITATOR_URL overrides inbound handling with any remote
+// facilitator in either mode.
 
 const USDC: Record<string, `0x${string}`> = {
   base: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
@@ -55,9 +58,11 @@ type CdpClientT = import('@coinbase/cdp-sdk').CdpClient;
 
 export class X402Rail implements PaymentRail {
   readonly network: string;
-  private facilitator: ReturnType<typeof useFacilitator>;
+  /** Remote facilitator (undefined → built-in local facilitator). */
+  private facilitator: ReturnType<typeof useFacilitator> | undefined;
   // self-custody mode
   private localAccount: ReturnType<typeof privateKeyToAccount> | undefined;
+  private walletClient: ReturnType<typeof createWalletClient> | undefined;
   private processedPayouts = new Map<string, PayoutResult>();
   // CDP mode
   private cdp: CdpClientT | undefined;
@@ -73,15 +78,34 @@ export class X402Rail implements PaymentRail {
       this.localAccount = privateKeyToAccount(pk as `0x${string}`);
     }
 
-    // Facilitator selection: explicit URL override > testnet public > CDP.
+    // Inbound facilitator: explicit URL > built-in (self-custody) > remote.
     const facilitatorUrl = process.env.X402_FACILITATOR_URL;
     if (facilitatorUrl) {
       this.facilitator = useFacilitator({ url: facilitatorUrl as `${string}://${string}` });
+    } else if (this.localAccount) {
+      this.facilitator = undefined; // built-in: verify + settle with our own wallet
     } else if (this.network === 'base') {
       this.facilitator = useFacilitator(mainnetFacilitator as Parameters<typeof useFacilitator>[0]);
     } else {
       this.facilitator = useFacilitator({ url: 'https://x402.org/facilitator' as `${string}://${string}` });
     }
+  }
+
+  /** The platform's signer, for built-in settlement and payouts. */
+  private getWalletClient(): ReturnType<typeof createWalletClient> {
+    if (!this.walletClient) {
+      const chain = CHAINS[this.network];
+      if (!chain || !this.localAccount) {
+        throw new PaymentError('bad_network', `No local signer for ${this.network}`);
+      }
+      const rpc = process.env.BASE_RPC_URL ?? DEFAULT_RPC[this.network];
+      this.walletClient = createWalletClient({
+        account: this.localAccount,
+        chain,
+        transport: http(rpc),
+      });
+    }
+    return this.walletClient;
   }
 
   private getCdp(): CdpClientT {
@@ -151,7 +175,17 @@ export class X402Rail implements PaymentRail {
       extra: requirements.extra,
     });
 
-    const verification = await this.facilitator.verify(payload, reqs);
+    // Built-in facilitator (self-custody): verify the payer-signed EIP-3009
+    // authorization locally, then submit it on-chain with the platform
+    // wallet. Remote facilitator otherwise. Same protocol either way.
+    const doVerify = this.facilitator
+      ? () => this.facilitator!.verify(payload, reqs)
+      : () => localVerify(this.getWalletClient() as never, payload, reqs);
+    const doSettle = this.facilitator
+      ? () => this.facilitator!.settle(payload, reqs)
+      : () => localSettle(this.getWalletClient() as never, payload, reqs);
+
+    const verification = await doVerify();
     if (!verification.isValid) {
       throw new PaymentError('verification_failed', verification.invalidReason ?? 'invalid');
     }
@@ -162,7 +196,7 @@ export class X402Rail implements PaymentRail {
     if (expectedPayer !== undefined && verifiedPayer && verifiedPayer !== expectedPayer.toLowerCase()) {
       throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
     }
-    const settlement = await this.facilitator.settle(payload, reqs);
+    const settlement = await doSettle();
     if (!settlement.success) {
       throw new PaymentError('settlement_failed', settlement.errorReason ?? 'settle failed');
     }
@@ -198,7 +232,7 @@ export class X402Rail implements PaymentRail {
     if (!chain || !asset) throw new PaymentError('bad_network', `No chain config for ${this.network}`);
     const rpc = process.env.BASE_RPC_URL ?? DEFAULT_RPC[this.network];
 
-    const wallet = createWalletClient({ account: this.localAccount!, chain, transport: http(rpc) });
+    const wallet = this.getWalletClient();
     const pub = createPublicClient({ chain, transport: http(rpc) });
 
     const txHash = await wallet.writeContract({
@@ -206,6 +240,8 @@ export class X402Rail implements PaymentRail {
       abi: erc20Abi,
       functionName: 'transfer',
       args: [args.to as `0x${string}`, creditsToAtomic(args.amountCredits)],
+      chain,
+      account: this.localAccount!,
     });
     // Wait for inclusion so a "confirmed" payout really is on-chain.
     const receipt = await pub.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });

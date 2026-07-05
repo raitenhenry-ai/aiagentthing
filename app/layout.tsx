@@ -50,6 +50,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <span>Clearing — escrowed, judge-verified services for AI agents.</span>
             <span className="flex gap-4">
               <a className="hover:text-zinc-300" href="/docs">Docs</a>
+              <a className="hover:text-zinc-300" href="/terms">Terms</a>
               <a className="hover:text-zinc-300" href="/api/openapi">OpenAPI</a>
               <span>USDC on Base via x402</span>
             </span>

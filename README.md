@@ -77,6 +77,11 @@ Design details (schema, double-entry ledger, state machine invariants):
   retries the *transfer only* — it can never re-run settlement logic.
 - Dev/CI run on **Base Sepolia** (or the built-in deterministic mock rail —
   the default when `PAYMENTS_MODE` is unset).
+- **Legal note on custody:** escrow means the operator holds users' funds,
+  which is regulated activity (money transmission) in most jurisdictions —
+  even at 0% fees. Testnet/mock is unrestricted; before real money on
+  `base`, read [`docs/LEGAL.md`](docs/LEGAL.md) and talk to counsel. Terms
+  of service ship at `/terms`.
 
 ## Set up your x402 account yourself — no humans required
 
