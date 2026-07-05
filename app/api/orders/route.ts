@@ -4,12 +4,22 @@ import { getDb } from '@/db/client';
 import { listings, orders } from '@/db/schema';
 import { authenticateAgent } from '@/lib/auth';
 import { ApiError, json, parseBody, route } from '@/lib/http';
+import { sendMessage } from '@/lib/messages';
 import { createOrderQuote } from '@/lib/orders';
 import type { OrderState } from '@/lib/state-machine';
+
+const attachmentSchema = z.object({
+  name: z.string().min(1).max(200),
+  url: z.string().max(700_000), // https:// link or an uploaded file as data: URI
+});
 
 const createOrderSchema = z.object({
   listing_id: z.string().min(1),
   input_payload: z.unknown(),
+  // Optional note to the seller, with optional uploaded files/links — lands
+  // on the order's message thread so the seller has context before working.
+  message: z.string().max(4000).optional(),
+  attachments: z.array(attachmentSchema).max(4).optional(),
 });
 
 // x402 step 1: POST the order intent, get HTTP 402 with payment
@@ -23,6 +33,26 @@ export const POST = route(async (req: Request) => {
     listingId: body.listing_id,
     inputPayload: body.input_payload ?? {},
   });
+
+  // Deliver the buyer's note (plus any uploads) to the seller, pinned to the
+  // new order. Message failures never break order creation.
+  if (body.message || (body.attachments?.length ?? 0) > 0) {
+    const sellerRows = await db
+      .select({ seller: listings.sellerAgentId })
+      .from(listings)
+      .where(eq(listings.id, body.listing_id));
+    const sellerId = sellerRows[0]?.seller;
+    if (sellerId && sellerId !== agent.id) {
+      await sendMessage(db, {
+        senderAgentId: agent.id,
+        recipientAgentId: sellerId,
+        body: body.message?.trim() || '(files attached)',
+        orderId: quote.orderId,
+        attachments: body.attachments,
+      }).catch((e) => console.error('order note delivery failed:', e));
+    }
+  }
+
   return json(
     {
       x402Version: 1,

@@ -106,6 +106,46 @@ export default async function AgentProfilePage({ params }: { params: { id: strin
         </>
       )}
 
+      {/* Portfolio — examples of work */}
+      {profile.portfolio.length > 0 && (
+        <>
+          <h2 className="mb-3 mt-8 text-sm font-semibold uppercase tracking-wider text-zinc-500">
+            Portfolio
+          </h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {profile.portfolio.map((p) => (
+              <div key={p.id} className="card overflow-hidden">
+                {p.is_image && p.url && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={p.url} alt={p.title} className="max-h-56 w-full border-b border-line object-cover" />
+                )}
+                <div className="px-5 py-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-white">{p.title}</span>
+                    {p.verified && (
+                      <span className="chip bg-emerald-500/15 text-emerald-400" title={`settled order ${p.order_id}`}>
+                        ✓ verified order
+                      </span>
+                    )}
+                  </div>
+                  {p.description && <p className="mt-1 text-sm text-zinc-400">{p.description}</p>}
+                  {p.url && !p.is_image && (
+                    <a href={p.url} className="mt-2 inline-block break-all text-xs text-accent-soft hover:underline">
+                      {p.url.startsWith('data:') ? 'download attached file' : p.url}
+                    </a>
+                  )}
+                  {p.sample !== null && p.sample !== undefined && (
+                    <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-line bg-black/40 px-3 py-2 text-[11px] leading-relaxed text-zinc-400">
+                      {JSON.stringify(p.sample, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
       {/* Reviews */}
       <h2 className="mb-3 mt-8 text-sm font-semibold uppercase tracking-wider text-zinc-500">
         Reviews

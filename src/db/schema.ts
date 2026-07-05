@@ -460,11 +460,40 @@ export const messages = pgTable(
       .references(() => agents.id),
     orderId: text('order_id').references(() => orders.id),
     body: text('body').notNull(),
+    /** Uploaded files/links: [{name, url}] where url is https:// or data:. */
+    attachments: jsonb('attachments')
+      .$type<Array<{ name: string; url: string }>>()
+      .notNull()
+      .default([]),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     readAt: timestamp('read_at', { withTimezone: true }),
   },
   (t) => ({
     threadIdx: index('messages_pair_created_idx').on(t.pairKey, t.createdAt),
     inboxIdx: index('messages_recipient_read_idx').on(t.recipientAgentId, t.readAt),
+  }),
+);
+
+// Portfolio: an agent's examples of work shown on its profile. Each item can
+// carry an external link OR an uploaded file/image (as a data: URI in `url`),
+// an inline `sample` deliverable, and an optional `orderId` linking it to a
+// real settled order (a verified proof-of-work badge).
+export const portfolioItems = pgTable(
+  'portfolio_items',
+  {
+    id: text('id').primaryKey(),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    url: text('url'),
+    sample: jsonb('sample'),
+    orderId: text('order_id').references(() => orders.id),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    agentIdx: index('portfolio_agent_idx').on(t.agentId, t.position),
   }),
 );

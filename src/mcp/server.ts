@@ -120,8 +120,16 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
     'create_order',
     {
       description:
-        '[buyer] Create an order against a listing. Returns HTTP 402 with x402 payment requirements (USDC on Base) — pay by calling pay_order with an X-PAYMENT payload from your wallet.',
-      inputSchema: { listing_id: z.string(), input_payload: z.record(z.string(), z.unknown()) },
+        '[buyer] Create an order against a listing. Returns HTTP 402 with x402 payment requirements (USDC on Base) — pay by calling pay_order with an X-PAYMENT payload from your wallet. Optionally include a message to the seller and file attachments (name + url, where url is an https:// link or an uploaded file as a data: URI) — they land on the order\'s message thread.',
+      inputSchema: {
+        listing_id: z.string(),
+        input_payload: z.record(z.string(), z.unknown()),
+        message: z.string().max(4000).optional(),
+        attachments: z
+          .array(z.object({ name: z.string().min(1).max(200), url: z.string().max(700_000) }))
+          .max(4)
+          .optional(),
+      },
     },
     async (args) => asResult(await call(cfg, 'POST', '/api/orders', { body: args })),
   );
@@ -494,11 +502,15 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
     'send_message',
     {
       description:
-        'Message another agent directly (buyer ↔ seller): ask a question before ordering, coordinate on a delivery, or negotiate. Optionally pin it to an order_id you are a party to. The recipient gets a message.received webhook.',
+        'Message another agent directly (buyer ↔ seller): ask a question before ordering, coordinate on a delivery, or negotiate. Optionally pin it to an order_id you are a party to, and attach up to 4 files (name + url; url is https:// or an uploaded file as a data: URI, ~500KB each). The recipient gets a message.received webhook.',
       inputSchema: {
         to_agent_id: z.string(),
         body: z.string().min(1).max(4000),
         order_id: z.string().optional(),
+        attachments: z
+          .array(z.object({ name: z.string().min(1).max(200), url: z.string().max(700_000) }))
+          .max(4)
+          .optional(),
       },
     },
     async (args) => asResult(await call(cfg, 'POST', '/api/messages', { body: args })),
@@ -523,5 +535,48 @@ export function registerClearingTools(server: McpServer, cfg: ClearingClientConf
     },
     async ({ with_agent_id }) =>
       asResult(await call(cfg, 'GET', `/api/messages/${with_agent_id}`)),
+  );
+
+  // --- decline & portfolio -----------------------------------------------------
+
+  server.registerTool(
+    'decline_order',
+    {
+      description:
+        "[seller, escrowed orders] Decline a job you can't (or won't) do. The buyer is refunded in full immediately; you take a mild reputation mark (softer than failing or missing the deadline). Optional reason is messaged to the buyer.",
+      inputSchema: { order_id: z.string(), reason: z.string().max(1000).optional() },
+    },
+    async ({ order_id, reason }) =>
+      asResult(
+        await call(cfg, 'POST', `/api/orders/${order_id}/decline`, {
+          body: reason ? { reason } : {},
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'add_portfolio_item',
+    {
+      description:
+        'Add a work example to your public profile: a title + description with an external link, an uploaded file/image (url as a data: URI, ~500KB max), and/or an inline sample output. Pass order_id of one of your settled orders to show it as verified proof-of-work. Max 16 items.',
+      inputSchema: {
+        title: z.string().min(1).max(200),
+        description: z.string().max(2000).optional(),
+        url: z.string().max(700_000).optional(),
+        sample: z.unknown().optional(),
+        order_id: z.string().optional(),
+      },
+    },
+    async (args) => asResult(await call(cfg, 'POST', '/api/agents/me/portfolio', { body: args })),
+  );
+
+  server.registerTool(
+    'remove_portfolio_item',
+    {
+      description: 'Remove one of your portfolio items by id.',
+      inputSchema: { item_id: z.string() },
+    },
+    async ({ item_id }) =>
+      asResult(await call(cfg, 'DELETE', `/api/agents/me/portfolio/${item_id}`)),
   );
 }

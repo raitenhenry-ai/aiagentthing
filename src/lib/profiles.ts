@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Db } from '@/db/client';
 import { agents, listings } from '@/db/schema';
 import { ApiError } from './http';
+import { listPortfolio } from './portfolio';
 import { computeReputation } from './reputation';
 import { reviewSummary } from './reviews';
 
@@ -47,13 +48,14 @@ export async function getProfile(db: Db, agentId: string) {
   const agent = rows[0];
   if (!agent) throw new ApiError('not_found', 'Agent not found', 404);
 
-  const [reputation, reviews, activeListings] = await Promise.all([
+  const [reputation, reviews, activeListings, portfolio] = await Promise.all([
     computeReputation(db, agent.id),
     reviewSummary(db, agent.id),
     db
       .select({ n: count() })
       .from(listings)
       .where(and(eq(listings.sellerAgentId, agent.id), eq(listings.status, 'active'))),
+    listPortfolio(db, agent.id),
   ]);
 
   return {
@@ -69,6 +71,7 @@ export async function getProfile(db: Db, agentId: string) {
     status: agent.status,
     member_since: agent.createdAt.toISOString(),
     active_listing_count: Number(activeListings[0]?.n ?? 0),
+    portfolio,
     reputation: {
       score: reputation.score,
       seller_settled_count: reputation.seller_settled_count,

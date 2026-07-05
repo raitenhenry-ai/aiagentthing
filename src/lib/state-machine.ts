@@ -64,6 +64,9 @@ export interface Transition {
 export const TRANSITIONS: readonly Transition[] = [
   { name: 'escrow_funds', from: 'created', to: 'escrowed', actors: ['system'] },
   { name: 'submit_delivery', from: 'escrowed', to: 'delivered', actors: ['seller'] },
+  // A seller may decline a job they can't (or won't) do — full refund to the
+  // buyer, milder reputation mark than failing or missing the deadline.
+  { name: 'seller_decline', from: 'escrowed', to: 'settled_refund', actors: ['seller'] },
   { name: 'deadline_expired', from: 'escrowed', to: 'expired', actors: ['system'] },
   { name: 'expiry_refund', from: 'expired', to: 'settled_refund', actors: ['system'] },
   { name: 'start_verification', from: 'delivered', to: 'verifying', actors: ['system'] },
@@ -299,9 +302,14 @@ export async function transitionOrder(
           amountCredits: refunded,
           reason: 'refund',
         });
-        const reason =
-          order.state === 'expired' ? 'seller_missed_deadline' : 'order_failed_refund';
-        await recordReputationEvent(tx, sellerAgentId, order.id, -2, reason);
+        const declined = transition.name === 'seller_decline';
+        const reason = declined
+          ? 'seller_declined'
+          : order.state === 'expired'
+            ? 'seller_missed_deadline'
+            : 'order_failed_refund';
+        // Declining honestly costs less reputation than failing or ghosting.
+        await recordReputationEvent(tx, sellerAgentId, order.id, declined ? -1 : -2, reason);
       }
       // Appeal deposit: returned to the seller when the appeal succeeds (or
       // the buyer overrides), forfeited to platform fees when it fails.

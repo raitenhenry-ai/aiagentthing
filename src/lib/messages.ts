@@ -10,21 +10,56 @@ import { emitWebhookEvent } from './webhooks';
 // optional). Threads are grouped by a stable `pairKey` = the two ids sorted.
 
 const MAX_BODY = 4000;
+const MAX_ATTACHMENTS = 4;
+const MAX_ATTACHMENT_URL = 700_000; // ~500KB file as a data: URI
+const MAX_ATTACHMENT_NAME = 200;
+
+export interface MessageAttachment {
+  name: string;
+  /** https:// link or an uploaded file as a data: URI. */
+  url: string;
+}
 
 /** Stable per-conversation key: the two agent ids, sorted, joined. */
 export function pairKey(a: string, b: string): string {
   return [a, b].sort().join('|');
 }
 
+function validateAttachments(attachments: MessageAttachment[] | undefined): MessageAttachment[] {
+  if (!attachments || attachments.length === 0) return [];
+  if (attachments.length > MAX_ATTACHMENTS) {
+    throw new ApiError('too_many_attachments', `At most ${MAX_ATTACHMENTS} attachments`, 422);
+  }
+  for (const a of attachments) {
+    if (!a.name?.trim() || a.name.length > MAX_ATTACHMENT_NAME) {
+      throw new ApiError('invalid_attachment', 'Each attachment needs a name (≤200 chars)', 422);
+    }
+    if (!a.url || a.url.length > MAX_ATTACHMENT_URL) {
+      throw new ApiError('attachment_too_large', 'Attachment exceeds the ~500KB limit', 413);
+    }
+    if (!/^(https?:\/\/|data:)/i.test(a.url)) {
+      throw new ApiError('invalid_attachment', 'Attachment url must be http(s) or a data: URI', 422);
+    }
+  }
+  return attachments.map((a) => ({ name: a.name.trim(), url: a.url }));
+}
+
 export async function sendMessage(
   db: Db,
-  args: { senderAgentId: string; recipientAgentId: string; body: string; orderId?: string },
+  args: {
+    senderAgentId: string;
+    recipientAgentId: string;
+    body: string;
+    orderId?: string;
+    attachments?: MessageAttachment[];
+  },
 ): Promise<{ messageId: string; createdAt: string }> {
   const body = args.body.trim();
   if (!body) throw new ApiError('empty_message', 'Message body is required', 422);
   if (body.length > MAX_BODY) {
     throw new ApiError('message_too_long', `Message exceeds ${MAX_BODY} characters`, 422);
   }
+  const attachments = validateAttachments(args.attachments);
   if (args.recipientAgentId === args.senderAgentId) {
     throw new ApiError('self_message', 'An agent cannot message itself', 409);
   }
@@ -61,6 +96,7 @@ export async function sendMessage(
     recipientAgentId: args.recipientAgentId,
     orderId: args.orderId,
     body,
+    attachments,
     createdAt,
   });
 
@@ -72,6 +108,7 @@ export async function sendMessage(
       from_agent_id: args.senderAgentId,
       order_id: args.orderId ?? null,
       preview: body.slice(0, 140),
+      attachment_count: attachments.length,
     },
   });
   return { messageId, createdAt: createdAt.toISOString() };
@@ -93,6 +130,7 @@ export async function getConversation(
   mine: boolean;
   order_id: string | null;
   body: string;
+  attachments: MessageAttachment[];
   read: boolean;
   created_at: string;
 }>> {
@@ -125,6 +163,7 @@ export async function getConversation(
       mine: m.senderAgentId === agentId,
       order_id: m.orderId,
       body: m.body,
+      attachments: (m.attachments as MessageAttachment[]) ?? [],
       read: m.recipientAgentId === agentId ? true : m.readAt !== null,
       created_at: m.createdAt.toISOString(),
     }));
