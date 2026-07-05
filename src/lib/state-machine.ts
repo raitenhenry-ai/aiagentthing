@@ -1,7 +1,8 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db, Tx } from '@/db/client';
 import { agents, listings, orders, reputationEvents, verifications } from '@/db/schema';
-import { enqueuePayout } from './payments/payouts';
+import { discardAuthorization } from './payments/authorizations';
+import { enqueueAuthorizationSettle, enqueuePayout } from './payments/payouts';
 import { recomputeAndStore } from './reputation';
 import { appealDepositBps, failOverrideWindowSeconds, platformFeeBps } from './env';
 import { newId } from './ids';
@@ -118,6 +119,7 @@ export interface OrderRow {
   buyerAgentId: string;
   state: OrderState;
   priceCredits: bigint;
+  settlementMode: string;
   deadlineAt: Date;
   failWindowEndsAt: Date | null;
   settledAt: Date | null;
@@ -136,6 +138,7 @@ async function lockOrder(tx: Tx, orderId: string): Promise<OrderRow> {
       buyerAgentId: orders.buyerAgentId,
       state: orders.state,
       priceCredits: orders.priceCredits,
+      settlementMode: orders.settlementMode,
       deadlineAt: orders.deadlineAt,
       failWindowEndsAt: orders.failWindowEndsAt,
       settledAt: orders.settledAt,
@@ -248,7 +251,9 @@ export async function transitionOrder(
         .orderBy(sql`${verifications.completedAt} DESC`)
         .limit(1);
       const freeAppeal = tierRows[0]?.tier === 'panel';
-      if (!freeAppeal) {
+      // Non-custodial orders have no credit balances to hold a deposit from;
+      // appeals are simply free in authorization mode.
+      if (!freeAppeal && order.settlementMode !== 'authorization') {
         await holdAppealDeposit(tx, {
           orderId: order.id,
           sellerAgentId,
@@ -275,33 +280,51 @@ export async function transitionOrder(
         if (!wallet) throw new TransitionError('guard_failed', `Agent ${agentId} not found`);
         return wallet;
       };
+      // Non-custodial (authorization) orders: no credits were ever held.
+      // Release = execute the buyer's authorization straight to the seller;
+      // refund = simply discard it (funds never left the buyer's wallet).
+      const nonCustodial = order.settlementMode === 'authorization';
       if (args.to === 'settled_released' || args.to === 'settled_override') {
-        const { net } = await releaseEscrow(tx, {
-          orderId: order.id,
-          sellerAgentId,
-          feeBps: platformFeeBps(),
-          entryType: args.to === 'settled_override' ? 'override_payment' : 'escrow_release',
-        });
-        await enqueuePayout(tx, {
-          orderId: order.id,
-          agentId: sellerAgentId,
-          toWallet: await walletOf(sellerAgentId),
-          amountCredits: net,
-          reason: args.to === 'settled_override' ? 'override' : 'release',
-        });
+        if (nonCustodial) {
+          await enqueueAuthorizationSettle(tx, {
+            orderId: order.id,
+            agentId: sellerAgentId,
+            toWallet: await walletOf(sellerAgentId),
+            amountCredits: order.priceCredits,
+            reason: args.to === 'settled_override' ? 'auth_override' : 'auth_release',
+          });
+        } else {
+          const { net } = await releaseEscrow(tx, {
+            orderId: order.id,
+            sellerAgentId,
+            feeBps: platformFeeBps(),
+            entryType: args.to === 'settled_override' ? 'override_payment' : 'escrow_release',
+          });
+          await enqueuePayout(tx, {
+            orderId: order.id,
+            agentId: sellerAgentId,
+            toWallet: await walletOf(sellerAgentId),
+            amountCredits: net,
+            reason: args.to === 'settled_override' ? 'override' : 'release',
+          });
+        }
         const reason =
           args.to === 'settled_override' ? 'settled_via_buyer_override' : 'order_passed';
         await recordReputationEvent(tx, sellerAgentId, order.id, args.to === 'settled_released' ? 2 : 1, reason);
         await recordReputationEvent(tx, order.buyerAgentId, order.id, 1, 'order_settled');
       } else {
-        const refunded = await refundEscrow(tx, { orderId: order.id, buyerAgentId: order.buyerAgentId });
-        await enqueuePayout(tx, {
-          orderId: order.id,
-          agentId: order.buyerAgentId,
-          toWallet: await walletOf(order.buyerAgentId),
-          amountCredits: refunded,
-          reason: 'refund',
-        });
+        if (nonCustodial) {
+          await discardAuthorization(tx, order.id);
+        } else {
+          const refunded = await refundEscrow(tx, { orderId: order.id, buyerAgentId: order.buyerAgentId });
+          await enqueuePayout(tx, {
+            orderId: order.id,
+            agentId: order.buyerAgentId,
+            toWallet: await walletOf(order.buyerAgentId),
+            amountCredits: refunded,
+            reason: 'refund',
+          });
+        }
         const declined = transition.name === 'seller_decline';
         const reason = declined
           ? 'seller_declined'

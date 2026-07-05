@@ -136,6 +136,7 @@ export class X402Rail implements PaymentRail {
     resource: string;
     description: string;
     payTo?: string;
+    maxTimeoutSeconds?: number;
     extra?: Record<string, string>;
   }): Promise<PaymentRequirements> {
     // Direct payments name the recipient's own wallet; escrowed orders
@@ -152,7 +153,7 @@ export class X402Rail implements PaymentRail {
       resource: args.resource,
       description: args.description,
       mimeType: 'application/json',
-      maxTimeoutSeconds: 300,
+      maxTimeoutSeconds: args.maxTimeoutSeconds ?? 300,
       extra: { name: 'USD Coin', version: '2', ...args.extra },
     };
   }
@@ -205,6 +206,35 @@ export class X402Rail implements PaymentRail {
       txHash: settlement.transaction,
       amountAtomic: BigInt(requirements.maxAmountRequired),
     };
+  }
+
+  /** Verify without settling: the payer-signed authorization is checked
+   * (signature, amount, recipient, funding) but never submitted on-chain. */
+  async verifyInbound(
+    paymentHeader: string,
+    requirements: PaymentRequirements,
+    expectedPayer?: string,
+  ): Promise<{ payer: string }> {
+    let payload;
+    try {
+      payload = PaymentPayloadSchema.parse(
+        JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8')),
+      );
+    } catch {
+      throw new PaymentError('invalid_payment', 'Malformed X-PAYMENT payload');
+    }
+    const reqs = PaymentRequirementsSchema.parse({ ...requirements, extra: requirements.extra });
+    const verification = this.facilitator
+      ? await this.facilitator.verify(payload, reqs)
+      : await localVerify(this.getWalletClient() as never, payload, reqs);
+    if (!verification.isValid) {
+      throw new PaymentError('verification_failed', verification.invalidReason ?? 'invalid');
+    }
+    const payer = (verification.payer ?? '').toLowerCase();
+    if (expectedPayer !== undefined && payer && payer !== expectedPayer.toLowerCase()) {
+      throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
+    }
+    return { payer };
   }
 
   async payout(args: {

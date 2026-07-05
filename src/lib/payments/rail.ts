@@ -54,6 +54,9 @@ export interface PaymentRail {
     resource: string;
     description: string;
     payTo?: string;
+    /** Authorization validity window (default 300s). Non-custodial escrow
+     * passes a long window: the authorization executes after verification. */
+    maxTimeoutSeconds?: number;
     extra?: Record<string, string>;
   }): Promise<PaymentRequirements>;
   /**
@@ -72,6 +75,17 @@ export interface PaymentRail {
     requirements: PaymentRequirements,
     expectedPayer?: string,
   ): Promise<InboundSettlement>;
+  /**
+   * Verify an inbound X-PAYMENT payload WITHOUT moving any funds: signature,
+   * amount, recipient, payer identity, and current funding are checked; the
+   * authorization is left unexecuted. Used by non-custodial (authorization)
+   * escrow, where settlement happens later — or never.
+   */
+  verifyInbound(
+    paymentHeader: string,
+    requirements: PaymentRequirements,
+    expectedPayer?: string,
+  ): Promise<{ payer: string }>;
   /**
    * Transfer USDC from the platform wallet to an agent wallet. Idempotent
    * per idempotencyKey — retried calls must not double-send.

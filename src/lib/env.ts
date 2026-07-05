@@ -32,6 +32,18 @@ export function paymentsMode(): string {
 }
 
 /**
+ * How new orders escrow:
+ *  - 'custodial': buyer funds settle into the platform wallet until release.
+ *  - 'authorization': NON-CUSTODIAL — only the buyer's signed x402 payment
+ *    authorization is held; on PASS it executes straight buyer→seller, on
+ *    refund it's discarded (funds never left the buyer). The platform never
+ *    holds user money, which is the low-legal-risk real-money mode.
+ */
+export function escrowMode(): 'custodial' | 'authorization' {
+  return process.env.ESCROW_MODE === 'authorization' ? 'authorization' : 'custodial';
+}
+
+/**
  * Whether the verifier must have a real judge configured before it will
  * auto-settle an order with `judged` acceptance criteria. When true and no
  * provider key is set, judged orders fail CLOSED (funds held for the buyer)

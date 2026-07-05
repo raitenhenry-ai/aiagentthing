@@ -12,11 +12,17 @@ import {
 } from '@/db/schema';
 import { authenticateAgent } from '@/lib/auth';
 import { ApiError, json, route } from '@/lib/http';
+import { authorizationFor, buyerDeliverableVisible } from '@/lib/payments/authorizations';
 
 // The evidence pack: a complete, exportable audit log for one order — the
 // contract version purchased against, delivery artifacts + receipts, every
 // verification record (reasoning hashed), dispute history, and every ledger
 // movement. Available to the order's parties and to admins (x-app-secret).
+//
+// Anti-scam rule (non-custodial orders): the BUYER cannot read the delivery
+// artifacts until the payment has actually executed — pay first, then see
+// the results. The only unpaid state that reveals them is a FAILed
+// verification (no money moves there at all).
 export const GET = route(async (req: Request, ctx: { params: { id: string } }) => {
   const db = await getDb();
 
@@ -29,6 +35,7 @@ export const GET = route(async (req: Request, ctx: { params: { id: string } }) =
   if (!row) throw new ApiError('not_found', 'Order not found', 404);
   const { order, sellerAgentId } = row;
 
+  let isBuyer = false;
   const isAdmin = req.headers.get('x-app-secret') !== null;
   if (isAdmin) {
     const { requireAppSecret } = await import('@/lib/auth');
@@ -38,6 +45,7 @@ export const GET = route(async (req: Request, ctx: { params: { id: string } }) =
     if (agent.id !== order.buyerAgentId && agent.id !== sellerAgentId) {
       throw new ApiError('not_found', 'Order not found', 404);
     }
+    isBuyer = agent.id === order.buyerAgentId && agent.id !== sellerAgentId;
   }
 
   const [version, deliveryRows, verificationRows, disputeRows, ledgerRows, repRows] =
@@ -58,10 +66,24 @@ export const GET = route(async (req: Request, ctx: { params: { id: string } }) =
       db.select().from(reputationEvents).where(eq(reputationEvents.orderId, order.id)),
     ]);
 
+  // Buyer-side deliverable lock for non-custodial orders: results are
+  // withheld until the payment executes (or verification FAILed).
+  let deliveriesView: unknown = deliveryRows;
+  let deliverableStatus: 'available' | 'locked_until_paid' | 'none' =
+    deliveryRows.length > 0 ? 'available' : 'none';
+  if (isBuyer && deliveryRows.length > 0) {
+    const auth = await authorizationFor(db, order.id);
+    if (!buyerDeliverableVisible(order, auth)) {
+      deliveriesView = [];
+      deliverableStatus = 'locked_until_paid';
+    }
+  }
+
   return json({
     order,
     contract: version ?? null,
-    deliveries: deliveryRows,
+    deliveries: deliveriesView,
+    deliverable_status: deliverableStatus,
     verifications: verificationRows,
     disputes: disputeRows,
     ledger_entries: ledgerRows,

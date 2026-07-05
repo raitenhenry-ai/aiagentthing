@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { listings, orders, verifications } from '@/db/schema';
 import { authenticateAgent } from '@/lib/auth';
 import { ApiError, json, route } from '@/lib/http';
+import { authorizationFor, buyerDeliverableVisible } from '@/lib/payments/authorizations';
 import type { CriterionResult, JudgeVerdict } from '@/lib/verification/judge';
 import type { VerificationRecord } from '@/lib/verification/run';
 
@@ -48,6 +49,20 @@ export const GET = route(async (req: Request, ctx: { params: { id: string } }) =
       }
     : null;
 
+  // Non-custodial orders: tell the buyer whether the deliverable is
+  // readable yet (locked until their payment actually executes; a FAILed
+  // verification unlocks it since no money moves).
+  let settlement: Record<string, unknown> = { mode: order.settlementMode };
+  if (order.settlementMode === 'authorization') {
+    const auth = await authorizationFor(db, order.id);
+    settlement = {
+      mode: 'authorization',
+      payment_status: auth?.status ?? 'none',
+      payment_tx_hash: auth?.txHash ?? null,
+      deliverable_visible_to_buyer: buyerDeliverableVisible(order, auth),
+    };
+  }
+
   return json({
     id: order.id,
     listing_id: order.listingId,
@@ -62,6 +77,7 @@ export const GET = route(async (req: Request, ctx: { params: { id: string } }) =
     deadline_at: order.deadlineAt.toISOString(),
     fail_window_ends_at: order.failWindowEndsAt?.toISOString() ?? null,
     settled_at: order.settledAt?.toISOString() ?? null,
+    settlement,
     verification: verificationView,
   });
 });

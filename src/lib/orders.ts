@@ -1,11 +1,13 @@
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '@/db/client';
-import { deliveries, ledgerEntries, listings, listingVersions, orders } from '@/db/schema';
+import { agents, deliveries, ledgerEntries, listings, listingVersions, orders } from '@/db/schema';
 import { inngest, isInngestConfigured } from '@/inngest/client';
+import { escrowMode, failOverrideWindowSeconds } from './env';
 import { ApiError } from './http';
 import { newId } from './ids';
 import { holdEscrow, topUp } from './ledger';
 import { getRail, PaymentError, type PaymentRequirements } from './payments';
+import { authorizationFor, holdAuthorization } from './payments/authorizations';
 import { settleInboundIdempotent } from './payments/inbound';
 import { transitionOrder } from './state-machine';
 import { runVerification } from './verification/run';
@@ -80,6 +82,9 @@ export async function createOrderQuote(
     buyerAgentId: args.buyerAgentId,
     state: 'created',
     priceCredits: version.priceCredits,
+    // Stamped at creation so the payment requirements (payTo) stay
+    // deterministic for this order even if the operator flips ESCROW_MODE.
+    settlementMode: escrowMode(),
     inputPayload: args.inputPayload,
     // Provisional; reset from payment time when escrow lands so sellers
     // never lose turnaround time to buyer payment delays.
@@ -103,13 +108,48 @@ export async function orderRequirements(
       id: orders.id,
       priceCredits: orders.priceCredits,
       state: orders.state,
+      settlementMode: orders.settlementMode,
       title: listings.title,
+      sellerAgentId: listings.sellerAgentId,
+      listingVersion: orders.listingVersion,
+      listingId: orders.listingId,
     })
     .from(orders)
     .innerJoin(listings, eq(orders.listingId, listings.id))
     .where(eq(orders.id, orderId));
   const order = rows[0];
   if (!order) throw new ApiError('not_found', 'Order not found', 404);
+
+  if (order.settlementMode === 'authorization') {
+    // Non-custodial: the buyer signs an authorization payable STRAIGHT to
+    // the seller. It must stay valid long enough to execute after delivery +
+    // verification (+ the FAIL window, for buyer overrides).
+    const sellerRows = await db
+      .select({ wallet: agents.walletAddress })
+      .from(agents)
+      .where(eq(agents.id, order.sellerAgentId));
+    const sellerWallet = sellerRows[0]?.wallet;
+    if (!sellerWallet) throw new ApiError('not_found', 'Seller not found', 404);
+    const versionRows = await db
+      .select({ turnaroundSeconds: listingVersions.turnaroundSeconds })
+      .from(listingVersions)
+      .where(
+        and(
+          eq(listingVersions.listingId, order.listingId),
+          eq(listingVersions.version, order.listingVersion),
+        ),
+      );
+    const turnaround = versionRows[0]?.turnaroundSeconds ?? 3600;
+    return getRail().buildRequirements({
+      amountCredits: order.priceCredits,
+      resource: `/api/orders/${order.id}/pay`,
+      description: `Clearing order ${order.id}: ${order.title}`,
+      payTo: sellerWallet,
+      maxTimeoutSeconds: turnaround + failOverrideWindowSeconds() + 48 * 3600,
+      extra: { order_id: order.id, escrow: 'authorization' },
+    });
+  }
+
   return getRail().buildRequirements({
     amountCredits: order.priceCredits,
     resource: `/api/orders/${order.id}/pay`,
@@ -145,6 +185,7 @@ export async function payForOrder(
       state: orders.state,
       buyerAgentId: orders.buyerAgentId,
       priceCredits: orders.priceCredits,
+      settlementMode: orders.settlementMode,
       listingId: orders.listingId,
       listingVersion: orders.listingVersion,
       createdAt: orders.createdAt,
@@ -164,6 +205,81 @@ export async function payForOrder(
   }
 
   const requirements = await orderRequirements(db, args.orderId);
+
+  // Non-custodial (authorization) escrow: verify the payer-signed
+  // authorization WITHOUT moving funds, then hold it. Money moves only when
+  // verification passes — straight buyer→seller — or never (refund).
+  if (order.settlementMode === 'authorization') {
+    const { payer } = await getRail().verifyInbound(
+      args.paymentHeader,
+      requirements,
+      args.buyerWallet,
+    );
+    if (payer && payer !== args.buyerWallet.toLowerCase()) {
+      throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
+    }
+    const turnaroundRows = await db
+      .select({ turnaroundSeconds: listingVersions.turnaroundSeconds })
+      .from(listingVersions)
+      .where(
+        and(
+          eq(listingVersions.listingId, order.listingId),
+          eq(listingVersions.version, order.listingVersion),
+        ),
+      );
+    const authDeadline = new Date(
+      Date.now() + (turnaroundRows[0]?.turnaroundSeconds ?? 3600) * 1000,
+    );
+    const finalDeadlineAuth = await db.transaction(async (tx) => {
+      const locked = await tx
+        .select({ state: orders.state, deadlineAt: orders.deadlineAt })
+        .from(orders)
+        .where(eq(orders.id, order.id))
+        .for('update');
+      const current = locked[0];
+      if (!current) throw new ApiError('not_found', 'Order not found', 404);
+      if (current.state !== 'created') {
+        // Idempotent retry: if this exact header is already held, succeed.
+        const held = await authorizationFor(tx, order.id);
+        if (held) return current.deadlineAt;
+        throw new ApiError('already_paid', `Order is already ${current.state}`, 409);
+      }
+      try {
+        await holdAuthorization(tx, {
+          orderId: order.id,
+          paymentHeader: args.paymentHeader,
+          requirements,
+          payerWallet: args.buyerWallet,
+        });
+      } catch (e) {
+        // Unique header index: the same signed payment can never authorize
+        // two different orders.
+        throw new PaymentError(
+          'payment_reused',
+          `This X-PAYMENT payload was already used: ${String(e).slice(0, 120)}`,
+        );
+      }
+      await tx.update(orders).set({ deadlineAt: authDeadline }).where(eq(orders.id, order.id));
+      await transitionOrder(tx, { orderId: order.id, to: 'escrowed', actor: 'system' });
+      return authDeadline;
+    });
+    const sellerRowsA = await db
+      .select({ sellerAgentId: listings.sellerAgentId })
+      .from(listings)
+      .where(eq(listings.id, order.listingId));
+    emitWebhookEvent(db, {
+      event: 'order.escrowed',
+      agentIds: [args.buyerAgentId, ...(sellerRowsA[0] ? [sellerRowsA[0].sellerAgentId] : [])],
+      payload: { order_id: order.id, state: 'escrowed', escrow: 'authorization' },
+    });
+    return {
+      orderId: order.id,
+      state: 'escrowed',
+      deadlineAt: finalDeadlineAuth,
+      txHash: 'authorization_held',
+    };
+  }
+
   const settlement = await settleInboundIdempotent(db, {
     paymentHeader: args.paymentHeader,
     requirements,

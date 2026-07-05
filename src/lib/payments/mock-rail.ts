@@ -37,6 +37,7 @@ export class MockRail implements PaymentRail {
     resource: string;
     description: string;
     payTo?: string;
+    maxTimeoutSeconds?: number;
     extra?: Record<string, string>;
   }): Promise<PaymentRequirements> {
     return {
@@ -48,7 +49,7 @@ export class MockRail implements PaymentRail {
       resource: args.resource,
       description: args.description,
       mimeType: 'application/json',
-      maxTimeoutSeconds: 300,
+      maxTimeoutSeconds: args.maxTimeoutSeconds ?? 300,
       extra: args.extra ?? {},
     };
   }
@@ -100,6 +101,36 @@ export class MockRail implements PaymentRail {
       amountAtomic: amount,
       txHash: `0xmock${createHash('sha256').update(key).digest('hex').slice(0, 59)}`,
     };
+  }
+
+  /** Verify without moving funds or consuming the nonce: payer identity,
+   * shape, and current balance. Execution happens later via settleInbound. */
+  async verifyInbound(
+    paymentHeader: string,
+    requirements: PaymentRequirements,
+    expectedPayer?: string,
+  ): Promise<{ payer: string }> {
+    let parsed: { payer?: string; nonce?: string };
+    try {
+      parsed = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'));
+    } catch {
+      throw new PaymentError('invalid_payment', 'Malformed X-PAYMENT payload');
+    }
+    if (!parsed.payer || !parsed.nonce) {
+      throw new PaymentError('invalid_payment', 'X-PAYMENT missing payer or nonce');
+    }
+    const payer = parsed.payer.toLowerCase();
+    if (expectedPayer !== undefined && payer !== expectedPayer.toLowerCase()) {
+      throw new PaymentError('payer_mismatch', 'Payment came from a different wallet');
+    }
+    if (this.processedPayments.has(`${parsed.payer}:${parsed.nonce}`)) {
+      throw new PaymentError('replayed_payment', 'Payment already settled');
+    }
+    const amount = BigInt(requirements.maxAmountRequired);
+    if ((this.balances.get(payer) ?? 0n) < amount) {
+      throw new PaymentError('insufficient_funds', 'Payer wallet cannot cover the amount');
+    }
+    return { payer };
   }
 
   async payout(args: {

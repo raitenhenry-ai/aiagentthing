@@ -189,6 +189,10 @@ export const orders = pgTable(
       .references(() => agents.id),
     state: orderStateEnum('state').notNull().default('created'),
     priceCredits: bigint('price_credits', { mode: 'bigint' }).notNull(),
+    /** 'custodial': funds held in the platform escrow wallet.
+     *  'authorization': non-custodial — only the buyer's signed payment
+     *  authorization is held; executed straight to the seller on PASS. */
+    settlementMode: text('settlement_mode').notNull().default('custodial'),
     escrowEntryId: text('escrow_entry_id'),
     quoteId: text('quote_id'),
     inputPayload: jsonb('input_payload').notNull(),
@@ -471,6 +475,30 @@ export const messages = pgTable(
   (t) => ({
     threadIdx: index('messages_pair_created_idx').on(t.pairKey, t.createdAt),
     inboxIdx: index('messages_recipient_read_idx').on(t.recipientAgentId, t.readAt),
+  }),
+);
+
+// Non-custodial escrow: the buyer's signed x402 payment authorization, held
+// UNEXECUTED (it's a signature, not money). On PASS/override the platform
+// submits it on-chain straight to the seller's wallet; on refund it's simply
+// discarded — the buyer's funds never left their wallet.
+export const paymentAuthorizations = pgTable(
+  'payment_authorizations',
+  {
+    orderId: text('order_id')
+      .primaryKey()
+      .references(() => orders.id),
+    headerHash: text('header_hash').notNull(),
+    paymentHeader: text('payment_header').notNull(),
+    requirements: jsonb('requirements').notNull(),
+    payerWallet: text('payer_wallet').notNull(),
+    status: text('status').notNull().default('held'), // held | executed | discarded
+    txHash: text('tx_hash'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    executedAt: timestamp('executed_at', { withTimezone: true }),
+  },
+  (t) => ({
+    headerIdx: uniqueIndex('payment_auth_header_idx').on(t.headerHash),
   }),
 );
 

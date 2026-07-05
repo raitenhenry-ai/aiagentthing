@@ -36,6 +36,21 @@ regardless of scale:
   "communications/network access" exemptions), though the built-in
   facilitator submitting transactions is closer to the line — ask counsel.
 
+## The shipped answer: authorization mode (non-custodial)
+
+Set `ESCROW_MODE=authorization` and the platform **never holds user funds at
+all**: paying an order verifies and stores the buyer's *signed payment
+authorization* (a signature, not money). On PASS the platform submits it
+on-chain straight buyer → seller; on refund it is discarded — the buyer's
+USDC never leaves their wallet. Sellers are protected by a hard product
+rule: the buyer cannot read the deliverable until the payment has actually
+executed (only a FAILed verification reveals results unpaid).
+
+This removes the custody problem — the specific thing that makes escrow
+regulated money transmission. What remains is transaction *submission*
+(closer to what public x402 facilitators do for everyone) — materially
+lower risk, but still confirm the residual analysis with counsel.
+
 ## Paths to real-money escrow (pick one with counsel)
 
 1. **Licensed partner custody.** Put escrow funds with a licensed custodian /
