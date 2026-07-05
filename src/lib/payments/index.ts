@@ -1,5 +1,10 @@
+import { createRequire } from 'node:module';
 import { MockRail } from './mock-rail';
 import type { PaymentRail } from './rail';
+
+// Lazy CJS loader that works under both webpack (Next) and ESM (tsx CLIs).
+const lazyRequire: NodeJS.Require =
+  typeof require !== 'undefined' ? require : createRequire(import.meta.url);
 
 export * from './rail';
 export { MockRail } from './mock-rail';
@@ -17,7 +22,7 @@ export function getRail(): PaymentRail {
   if (!globalStore.__clearingRail) {
     if (process.env.PAYMENTS_MODE === 'x402') {
       // Lazy import keeps CDP/x402 out of the bundle unless configured.
-      const { X402Rail } = require('./x402-rail') as typeof import('./x402-rail');
+      const { X402Rail } = lazyRequire('./x402-rail') as typeof import('./x402-rail');
       globalStore.__clearingRail = new X402Rail();
     } else {
       globalStore.__clearingRail = new MockRail();

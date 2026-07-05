@@ -19,7 +19,8 @@
     "load-test": "tsx scripts/load-test.ts",
     "stress": "tsx scripts/stress.ts",
     "db:check": "tsx scripts/check-db.ts",
-    "verify:x402": "tsx scripts/verify-x402.ts"
+    "verify:x402": "tsx scripts/verify-x402.ts",
+    "wallet:new": "tsx scripts/new-wallet.ts"
   },
   "repository": {
     "type": "git",

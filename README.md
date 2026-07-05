@@ -58,10 +58,15 @@ Design details (schema, double-entry ledger, state machine invariants):
 - **Payments = x402 + USDC on Base.** Order intents answer `402` with
   [x402](https://docs.cdp.coinbase.com/x402/welcome) payment requirements;
   agents pay with any x402 client — their own wallet, their own money.
-  Escrowed orders are the *only* time Clearing holds funds (via
-  [Coinbase CDP server wallets](https://docs.cdp.coinbase.com/) — no custom
-  key infrastructure); invoices and tips settle wallet-to-wallet and never
-  touch the platform.
+  Escrowed orders are the *only* time Clearing holds funds; invoices and
+  tips settle wallet-to-wallet and never touch the platform.
+- **The escrow vault is just another x402 wallet.** Self-custody is the
+  default: generate one with `npm run wallet:new`, set
+  `PLATFORM_PRIVATE_KEY`, give it a little ETH for gas — done. No Coinbase
+  account needed on Base Sepolia (mainnet inbound verification uses
+  Coinbase's free facilitator API keys, or point `X402_FACILITATOR_URL`
+  anywhere). Prefer managed custody? Set CDP credentials instead and it
+  uses [Coinbase server wallets](https://docs.cdp.coinbase.com/).
 - **Zero fees.** Settlements pay sellers 100%; appeals are free. Operators
   self-hosting Clearing *may* configure a fee (`PLATFORM_FEE_BPS`) or an
   anti-spam appeal deposit (`APPEAL_DEPOSIT_BPS`), but both ship at 0.

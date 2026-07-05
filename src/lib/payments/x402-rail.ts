@@ -1,7 +1,16 @@
+import { createRequire } from 'node:module';
 import { PaymentRequirementsSchema, PaymentPayloadSchema } from 'x402/types';
 import { useFacilitator } from 'x402/verify';
 import { facilitator as mainnetFacilitator } from '@coinbase/x402';
-import { CdpClient } from '@coinbase/cdp-sdk';
+import {
+  createPublicClient,
+  createWalletClient,
+  erc20Abi,
+  http,
+  type Chain,
+} from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { base, baseSepolia } from 'viem/chains';
 import {
   creditsToAtomic,
   PaymentError,
@@ -11,45 +20,91 @@ import {
   type PayoutResult,
 } from './rail';
 
-// Production rail: x402 (Coinbase facilitator) for inbound payments, CDP
-// server wallets for escrow custody and outbound USDC transfers on Base.
-// No custom wallet/key infrastructure — custody is CDP's problem.
+// Production rail: x402 for inbound payments, and ONE of two custody modes
+// for the escrow wallet + outbound USDC payouts on Base:
 //
-// Env: CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET,
-//      X402_NETWORK=base|base-sepolia, PLATFORM_WALLET_NAME.
+//   1. Self-custody (default when PLATFORM_PRIVATE_KEY is set): the escrow
+//      wallet is an ordinary Base wallet — the same kind agents generate for
+//      themselves — and payouts are plain USDC transfers signed with that
+//      key via a public RPC. No Coinbase account needed. The wallet needs a
+//      little ETH on Base for gas.
+//   2. Coinbase CDP server wallets (CDP_API_KEY_ID/SECRET + CDP_WALLET_SECRET):
+//      managed custody, transfers via CDP with idempotency keys.
+//
+// Inbound settlement always goes through an x402 facilitator: the public
+// x402.org facilitator on base-sepolia (no keys), Coinbase's facilitator on
+// base mainnet (needs free CDP API keys), or any facilitator you point
+// X402_FACILITATOR_URL at.
 
-const USDC: Record<string, string> = {
+const USDC: Record<string, `0x${string}`> = {
   base: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
   'base-sepolia': '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
 };
 
+const CHAINS: Record<string, Chain> = {
+  base,
+  'base-sepolia': baseSepolia,
+};
+
+const DEFAULT_RPC: Record<string, string> = {
+  base: 'https://mainnet.base.org',
+  'base-sepolia': 'https://sepolia.base.org',
+};
+
+type CdpClientT = import('@coinbase/cdp-sdk').CdpClient;
+
 export class X402Rail implements PaymentRail {
   readonly network: string;
-  private cdp: CdpClient | undefined;
   private facilitator: ReturnType<typeof useFacilitator>;
-  private platformAddress: string | undefined;
+  // self-custody mode
+  private localAccount: ReturnType<typeof privateKeyToAccount> | undefined;
+  private processedPayouts = new Map<string, PayoutResult>();
+  // CDP mode
+  private cdp: CdpClientT | undefined;
 
   constructor() {
     this.network = process.env.X402_NETWORK ?? 'base-sepolia';
-    // Mainnet uses the CDP facilitator (auth headers); testnet uses the
-    // public x402.org facilitator.
-    this.facilitator =
-      this.network === 'base'
-        ? useFacilitator(mainnetFacilitator as Parameters<typeof useFacilitator>[0])
-        : useFacilitator({ url: 'https://x402.org/facilitator' as `${string}://${string}` });
+
+    const pk = process.env.PLATFORM_PRIVATE_KEY;
+    if (pk) {
+      if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) {
+        throw new PaymentError('bad_key', 'PLATFORM_PRIVATE_KEY must be a 0x-prefixed 32-byte hex key');
+      }
+      this.localAccount = privateKeyToAccount(pk as `0x${string}`);
+    }
+
+    // Facilitator selection: explicit URL override > testnet public > CDP.
+    const facilitatorUrl = process.env.X402_FACILITATOR_URL;
+    if (facilitatorUrl) {
+      this.facilitator = useFacilitator({ url: facilitatorUrl as `${string}://${string}` });
+    } else if (this.network === 'base') {
+      this.facilitator = useFacilitator(mainnetFacilitator as Parameters<typeof useFacilitator>[0]);
+    } else {
+      this.facilitator = useFacilitator({ url: 'https://x402.org/facilitator' as `${string}://${string}` });
+    }
   }
 
-  private getCdp(): CdpClient {
-    if (!this.cdp) this.cdp = new CdpClient();
+  private getCdp(): CdpClientT {
+    if (!this.cdp) {
+      // Lazy CJS load (works under webpack and ESM) so CDP is only pulled in
+      // when CDP custody is actually used.
+      const lazyRequire: NodeJS.Require =
+        typeof require !== 'undefined' ? require : createRequire(import.meta.url);
+      const { CdpClient } = lazyRequire('@coinbase/cdp-sdk') as typeof import('@coinbase/cdp-sdk');
+      this.cdp = new CdpClient();
+    }
     return this.cdp;
   }
 
-  private async platformWallet(): Promise<{ address: string; account: unknown }> {
+  /** The custody wallet: the local key's address, or the CDP server wallet. */
+  async platformWallet(): Promise<{ address: string }> {
+    if (this.localAccount) {
+      return { address: this.localAccount.address.toLowerCase() };
+    }
     const account = await this.getCdp().evm.getOrCreateAccount({
       name: process.env.PLATFORM_WALLET_NAME ?? 'clearing-escrow',
     });
-    this.platformAddress = account.address.toLowerCase();
-    return { address: this.platformAddress, account };
+    return { address: account.address.toLowerCase() };
   }
 
   async buildRequirements(args: {
@@ -123,11 +178,56 @@ export class X402Rail implements PaymentRail {
     amountCredits: bigint;
     idempotencyKey: string;
   }): Promise<PayoutResult> {
-    const { account } = await this.platformWallet();
-    // CDP transfers accept an idempotency key so retried payouts can never
-    // double-send.
+    if (this.localAccount) return this.localPayout(args);
+    return this.cdpPayout(args);
+  }
+
+  /** Self-custody payout: a plain ERC-20 USDC transfer signed with the
+   * platform key. In-process idempotency guards same-key retries; the
+   * payouts table (reserve → execute → confirm) guards across restarts. */
+  private async localPayout(args: {
+    to: string;
+    amountCredits: bigint;
+    idempotencyKey: string;
+  }): Promise<PayoutResult> {
+    const existing = this.processedPayouts.get(args.idempotencyKey);
+    if (existing) return existing;
+
+    const chain = CHAINS[this.network];
+    const asset = USDC[this.network];
+    if (!chain || !asset) throw new PaymentError('bad_network', `No chain config for ${this.network}`);
+    const rpc = process.env.BASE_RPC_URL ?? DEFAULT_RPC[this.network];
+
+    const wallet = createWalletClient({ account: this.localAccount!, chain, transport: http(rpc) });
+    const pub = createPublicClient({ chain, transport: http(rpc) });
+
+    const txHash = await wallet.writeContract({
+      address: asset,
+      abi: erc20Abi,
+      functionName: 'transfer',
+      args: [args.to as `0x${string}`, creditsToAtomic(args.amountCredits)],
+    });
+    // Wait for inclusion so a "confirmed" payout really is on-chain.
+    const receipt = await pub.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
+    if (receipt.status !== 'success') {
+      throw new PaymentError('payout_reverted', `USDC transfer reverted: ${txHash}`);
+    }
+    const result = { txHash };
+    this.processedPayouts.set(args.idempotencyKey, result);
+    return result;
+  }
+
+  /** CDP payout: managed transfer with a provider-side idempotency key. */
+  private async cdpPayout(args: {
+    to: string;
+    amountCredits: bigint;
+    idempotencyKey: string;
+  }): Promise<PayoutResult> {
+    const account = await this.getCdp().evm.getOrCreateAccount({
+      name: process.env.PLATFORM_WALLET_NAME ?? 'clearing-escrow',
+    });
     const result = await (
-      account as {
+      account as unknown as {
         transfer: (a: {
           to: string;
           amount: bigint;
