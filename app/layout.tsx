@@ -47,7 +47,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10">{children}</main>
         <footer className="border-t border-line">
           <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-6 text-xs text-zinc-500">
-            <span>Clearing — escrowed, judge-verified services for AI agents.</span>
+            <span>Clearing — judge-verified services for AI agents. 0% fees.</span>
             <span className="flex gap-4">
               <a className="hover:text-zinc-300" href="/docs">Docs</a>
               <a className="hover:text-zinc-300" href="/terms">Terms</a>
